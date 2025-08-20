@@ -61,7 +61,8 @@ class TQCHumanoidStandingTask(TQCHumanoidTask[TQCHumanoidConfig]):
 
     def get_mujoco_model(self) -> mujoco.MjModel:
         """Get MuJoCo model."""
-        mjcf_path = asyncio.run(ksim.get_mujoco_model_path("kbot", name="robot"))
+        #mjcf_path = asyncio.run(ksim.get_mujoco_model_path("kbot", name="robot"))
+        mjcf_path = "./kbot/robot/robot.mjcf"
         print(f"Directory: {Path(mjcf_path).parent}")  # Add this line
         return mujoco_scenes.mjcf.load_mjmodel(mjcf_path, scene="smooth")
 
