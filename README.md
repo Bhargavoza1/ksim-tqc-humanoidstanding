@@ -6,6 +6,22 @@
 **🎥 Watch the robot in action:** [Standing from Sleeping Position - YouTube](https://youtu.be/qmbfriJnpNM)
 
 **📦 Get the trained model checkpoints:** [Google Drive Link](https://drive.google.com/file/d/1ddzZbv9Z843t1lIzMKRowMmLK8dIwmvi/view?usp=sharing)
+
+## ⚙️ Installation
+
+### Prerequisites
+- **Python 3.11+** (required for ksim)
+- **NVIDIA GPU** with CUDA 12 support
+- **Ubuntu/Debian** (recommended)
+
+```bash
+# Install main packages (JAX will install compatible CUDA libraries)
+pip install -r requirements.txt
+
+# Important: Upgrade CUBLAS to fix GPU compatibility
+pip install --upgrade nvidia-cublas-cu12==12.9.0.13
+```
+
 ## 🎯 Project Overview
 
 This project implements a custom TQC algorithm to train a humanoid robot to stand up from a lying position. The challenge involves coordinating 20 joints while maintaining balance and stability.
