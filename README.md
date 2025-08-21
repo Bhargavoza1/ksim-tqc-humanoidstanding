@@ -3,8 +3,9 @@
 **Training a humanoid robot to stand from a sleeping position using TQC (Truncated Quantile Critics) reinforcement learning with 20 degrees of freedom.**
 
 ## 📥 Download Checkpoints
-Get the trained model checkpoints: [Google Drive Link](https://drive.google.com/file/d/1ddzZbv9Z843t1lIzMKRowMmLK8dIwmvi/view?usp=sharing)
+**🎥 Watch the robot in action:** [Standing from Sleeping Position - YouTube](https://youtu.be/qmbfriJnpNM)
 
+**📦 Get the trained model checkpoints:** [Google Drive Link](https://drive.google.com/file/d/1ddzZbv9Z843t1lIzMKRowMmLK8dIwmvi/view?usp=sharing)
 ## 🎯 Project Overview
 
 This project implements a custom TQC algorithm to train a humanoid robot to stand up from a lying position. The challenge involves coordinating 20 joints while maintaining balance and stability.
