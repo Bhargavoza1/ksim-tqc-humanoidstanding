@@ -1,0 +1,36 @@
+# Core ML/RL packages (pin to working versions)
+jax[cuda12]==0.6.1
+jaxlib==0.6.1
+ksim==0.1.3
+xax==0.3.0
+
+# MuJoCo (pin to working versions - critical!)
+mujoco==3.3.2
+mujoco-mjx==3.3.2
+mujoco-scenes==0.0.15
+
+# JAX ecosystem (pin to working versions)
+equinox==0.12.2
+optax==0.2.4
+chex==0.1.89
+distrax==0.1.5
+jaxtyping==0.3.2
+
+
+# TensorFlow ecosystem (for distrax compatibility)
+tensorflow-probability==0.25.0
+
+# Supporting packages
+numpy==1.26.4
+scipy==1.15.3
+dm-tree==0.1.9
+orbax-checkpoint==0.11.13
+
+# Development tools
+jupyter
+ipykernel
+pre-commit
+
+# Optional: Inference and visualization
+kinfer[jax]
+matplotlib
