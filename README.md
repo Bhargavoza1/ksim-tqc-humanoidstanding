@@ -34,7 +34,8 @@ This project implements a custom TQC algorithm to train a humanoid robot to stan
 - **Training Strategy**: 4:1 critic-to-actor update ratio for off-policy stability
 - **Hardware**: RTX 4070 Ti with 512 parallel environments
 - **Implementation**: Custom JAX-based replay buffer and policy networks
-- **Timeline**: 3 months of continuous training and experimentation
+- **Project Duration**: 3 months of development,and research
+- **Training Time**: Robot learns standing behavior within ~24 hours
 
 ### Key Technical Innovations
 - **Action Scaling**: `scaled_action = tanh_action * action_range + self.action_bias` 
