@@ -10,18 +10,49 @@ import xax
 from ksim.types import Trajectory, PhysicsModel, PhysicsState
 from jaxtyping import Array, PRNGKeyArray, PyTree
 from ksim.types import PhysicsModel, Trajectory
-from ksim.utils.mujoco import get_geom_data_idx_from_name, get_body_data_idx_from_name
+from ksim.utils.mujoco import get_geom_data_idx_from_name, get_body_data_idx_from_name, get_qpos_data_idxs_by_name
 
 
 @attrs.define(frozen=True, kw_only=True)
 class MuJoCoStandupHeightReward(ksim.Reward):
-    """Exact MuJoCo Standup v5 height reward: uph_cost = height / dt"""
-
+    """Enhanced MuJoCo Standup v5 height reward with target height and stabilization."""
     dt: float = attrs.field(default=0.02)
+    target_height: float = attrs.field(default=0.95)  # Target standing height
+    max_reward_height: float = attrs.field(default=1.1)  # Cap reward above this height
+    stabilization_zone: float = attrs.field(default=0.1)  # Zone around target for stabilization
 
     def get_reward(self, trajectory: ksim.Trajectory) -> Array:
-        height = trajectory.qpos[..., 2]  # z-coordinate (torso height)
-        return height / self.dt
+        height = trajectory.qpos[..., 2]  # z-coordinate (base height)
+
+        # Original MuJoCo reward: height / dt (encourages getting higher)
+        base_reward = height / self.dt
+
+        # Add stabilization component when near target
+        distance_from_target = jnp.abs(height - self.target_height)
+
+        # Bonus for being close to target height
+        stabilization_bonus = jnp.where(
+            distance_from_target < self.stabilization_zone,
+            (self.stabilization_zone - distance_from_target) / self.stabilization_zone * 5.0,  # Up to 5.0 bonus
+            0.0
+        )
+
+        # Reduce reward if too high (prevent excessive jumping)
+        height_cap_factor = jnp.where(
+            height > self.max_reward_height,
+            jnp.exp(-(height - self.max_reward_height) / 0.1),  # Exponential decay above max
+            1.0
+        )
+
+        # Combine: base MuJoCo reward + stabilization bonus + height cap
+        total_reward = (base_reward + stabilization_bonus) * height_cap_factor
+
+        # Debug prints
+        #jax.debug.print("Height: {}, Base reward: {}, Stabilization: {}, Cap factor: {}, Total: {}",
+        #                height[0], base_reward[0], stabilization_bonus[0],
+        #                height_cap_factor[0], total_reward[0])
+
+        return total_reward
 
 
 @attrs.define(frozen=True, kw_only=True)
@@ -349,6 +380,88 @@ class MirrorSymmetryReward(ksim.Reward):
     ) -> "MirrorSymmetryReward":
         return cls(
             tolerance=tolerance,
+            scale=scale,
+            scale_by_curriculum=scale_by_curriculum,
+        )
+
+
+@attrs.define(frozen=True, kw_only=True)
+class ConditionalJointPositionReward(ksim.Reward):
+    """Joint position reward that only activates when robot is standing at correct height."""
+    joint_indices: tuple[int, ...] = attrs.field()
+    joint_targets: tuple[float, ...] = attrs.field()
+    min_height: float = attrs.field(default=0.85)  # Minimum height to activate
+    max_height: float = attrs.field(default=1.05)  # Maximum height to activate
+    height_ramp_width: float = attrs.field(default=0.05)  # Smooth activation zone
+
+    def get_reward(self, trajectory: Trajectory) -> Array:
+        """Joint position reward that ramps up when robot reaches standing height."""
+
+        # Get current base height
+        base_height = trajectory.qpos[..., 2]
+
+        # Create height-based activation mask
+        # Smoothly ramp up reward as robot enters the good height zone
+        height_factor = jnp.where(
+            base_height < self.min_height - self.height_ramp_width,
+            0.0,  # No joint reward when too low
+            jnp.where(
+                base_height > self.max_height + self.height_ramp_width,
+                0.0,  # No joint reward when too high
+                jnp.where(
+                    (base_height >= self.min_height) & (base_height <= self.max_height),
+                    1.0,  # Full joint reward in good height zone
+                    # Smooth ramp in transition zones
+                    jnp.where(
+                        base_height < self.min_height,
+                        (base_height - (self.min_height - self.height_ramp_width)) / self.height_ramp_width,
+                        (self.max_height + self.height_ramp_width - base_height) / self.height_ramp_width
+                    )
+                )
+            )
+        )
+
+        # Get joint positions and calculate deviation from targets
+        joint_positions = trajectory.qpos[..., 7:]  # Skip base position/rotation
+        joint_subset = joint_positions[..., jnp.array(self.joint_indices)]
+
+        # Calculate joint position error
+        joint_errors = joint_subset - jnp.array(self.joint_targets)
+        joint_reward = jnp.exp(-jnp.sum(jnp.square(joint_errors), axis=-1) / 0.1)
+
+        # Apply height-based activation
+        final_reward = joint_reward * height_factor
+
+        #jax.debug.print("Base height: {}", base_height[0])
+        #jax.debug.print("Height factor: {}", height_factor[0])
+        #jax.debug.print("Joint reward: {}", joint_reward[0])
+        #jax.debug.print("Final conditional reward: {}", final_reward[0])
+
+        return final_reward
+
+    @classmethod
+    def create(
+            cls,
+            physics_model: PhysicsModel,
+            joint_positions: dict[str, float],
+            min_height: float = 0.85,
+            max_height: float = 1.05,
+            scale: float = 1.0,
+            scale_by_curriculum: bool = False,
+    ) -> "ConditionalJointPositionReward":
+        # Get joint indices
+        joint_to_idx = get_qpos_data_idxs_by_name(physics_model)
+        joint_indices = tuple([
+            int(joint_to_idx[name][0]) - 7  # Subtract 7 for base offset
+            for name in joint_positions.keys()
+        ])
+        joint_targets = tuple(joint_positions.values())
+
+        return cls(
+            joint_indices=joint_indices,
+            joint_targets=joint_targets,
+            min_height=min_height,
+            max_height=max_height,
             scale=scale,
             scale_by_curriculum=scale_by_curriculum,
         )

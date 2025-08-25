@@ -67,7 +67,7 @@
     <body name="base" pos="0.00000000 0.00000000 0.10000000" quat="0.7071054825112363  -0.7071054825112363 0.0 0.0" childclass="robot">
       <freejoint name="floating_base" />
       <geom name="base_visual" pos="0 -0.0 0" quat="1.0 0.0 0.0 .0" material="base_material" type="sphere" size="0.01" class="visual" />
-      <body name="Torso_Side_Right" pos="0 -0.0 0" quat="0.7071054825112363  0.0 -0.7071054825112363 0.0 ">
+      <body name="Torso_Side_Right" pos="0 -0.0 0" quat="1.0  0.0 0.0 0.0 ">
         <inertial pos="0.093177 -0.000920 -0.063462" quat="1.0 0.0 0.0 0.0" mass="13.504988" diaginertia="0.485847 0.512347 0.0592" />
         <geom name="Torso_Side_Right_visual" pos="0 0 0" quat="1.0 0.0 0.0 0.0" material="Torso_Side_Right_material" type="mesh" mesh="Torso_Side_Right.stl" class="visual" />
 

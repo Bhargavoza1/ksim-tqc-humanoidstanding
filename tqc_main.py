@@ -13,7 +13,7 @@ def main_standing():
     TQCHumanoidStandingTask.launch(
         TQCHumanoidConfig(
 
-            critic_updates_per_step=4,
+            critic_updates_per_step=5,
             # 🏗️ NETWORK ARCHITECTURE
             actor_layer_sizes=[256, 256  ],
             critic_layer_sizes=[512, 512  ],
@@ -25,7 +25,7 @@ def main_standing():
 
 
             learning_rate_actor=1e-4,
-            learning_rate_critic=2e-4,
+            learning_rate_critic=1e-4,
             learning_rate_temp=3e-4,
             #use_circular_gradients=False,  # Use stable detached gradients
             #learning_rate_temp_circular=3e-4,
@@ -37,7 +37,7 @@ def main_standing():
 
 
             # 📊 TRAINING SCALE
-            num_envs=512,            # Good balance for standing task
+            num_envs=256,            # Good balance for standing task
             batch_size=256,
             buffer_size=100_000,     # Sufficient for standing patterns
             min_buffer_size=2000,    # Start training earlier
@@ -82,7 +82,7 @@ def main_standing():
             # 🎥 RENDERING
             render_track_body_id=0,
             render_distance=2.4,
-            render_azimuth=45.0,
+            render_azimuth=0.0,
             render_elevation=-15.0,
             render_lookat=[0.0, 0.0, 0.6],  # Focus on standing height
         )

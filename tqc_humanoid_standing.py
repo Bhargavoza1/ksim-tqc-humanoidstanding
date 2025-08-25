@@ -21,7 +21,7 @@ from tqc_utils import ZEROS
 from tqc_standing_rewards import (
 
     MuJoCoStandupHeightReward, MuJoCoUprightReward, SimpleUprightReward, FootContactReward, ContactPenalty,
-    FootStabilityReward, MirrorSymmetryReward,   SimpleHeadUprightReward)
+    FootStabilityReward, MirrorSymmetryReward, SimpleHeadUprightReward, ConditionalJointPositionReward)
 
 # Keep some useful existing rewards
 from pathlib import Path
@@ -200,33 +200,59 @@ class TQCHumanoidStandingTask(TQCHumanoidTask[TQCHumanoidConfig]):
         return []
 
     def get_rewards(self, physics_model: ksim.PhysicsModel) -> list[ksim.Reward]:
-        """Rebalanced rewards: Strong positive signals, weak penalties."""
+        """Rebalanced rewards with height stabilization and drastic move penalties."""
+
+        target_joint_positions = {
+            "dof_right_shoulder_pitch_03": 0.0,
+            "dof_right_shoulder_roll_03": math.radians(-10.0),
+            "dof_right_shoulder_yaw_02": 0.0,
+            "dof_right_elbow_02": math.radians(90.0),
+            "dof_right_wrist_00": 0.0,
+            "dof_left_shoulder_pitch_03": 0.0,
+            "dof_left_shoulder_roll_03": math.radians(10.0),
+            "dof_left_shoulder_yaw_02": 0.0,
+            "dof_left_elbow_02": math.radians(-90.0),
+            "dof_left_wrist_00": 0.0,
+            "dof_right_hip_pitch_04": math.radians(-20.0),
+            "dof_right_hip_roll_03": math.radians(0.0),
+            "dof_right_hip_yaw_03": 0.0,
+            "dof_right_knee_04": math.radians(-50.0),
+            "dof_right_ankle_02": math.radians(30.0),
+            "dof_left_hip_pitch_04": math.radians(20.0),
+            "dof_left_hip_roll_03": math.radians(0.0),
+            "dof_left_hip_yaw_03": 0.0,
+            "dof_left_knee_04": math.radians(50.0),
+            "dof_left_ankle_02": math.radians(-30.0),
+        }
+
         return [
-            # 🎯 PRIMARY OBJECTIVES (Much stronger)
-            MuJoCoStandupHeightReward(scale=15.0),  # Increased from 3.0 next to 10
-            #SimpleUprightReward(scale=10.0),  # Increased from 3.0
+            # 🎯 PRIMARY OBJECTIVES (Height-aware scaling)
+            MuJoCoStandupHeightReward(
+                target_height=0.95,  # Primary goal: reach standing height
+                scale=13.0,  # High priority for standing up
+            ),
+
             SimpleHeadUprightReward.create(
                 physics_model=physics_model,
                 imu_body_name="Torso_Side_Right",
-                scale=22.0,#next to 22
+                scale=12.0,
             ),
 
             # 🤖 SUPPORTING OBJECTIVES
             MirrorSymmetryReward.create(
                 physics_model=physics_model,
-                scale=22.0,  # Increased from 2.0 next to 22
-                tolerance=0.1,  # Tighter from 0.2
+                scale=8.0,  # Reduced since conditional pose reward handles this
+                tolerance=0.2,
             ),
 
             FootContactReward.create(
                 physics_model=physics_model,
                 foot_body_names=(
-                    "KB_D_501L_L_LEG_FOOT",  # body name (remove _collision_capsule_0/1)
-                    "KB_D_501R_R_LEG_FOOT",  # body name
-                    # Or whatever the actual foot body names are
+                    "KB_D_501L_L_LEG_FOOT",
+                    "KB_D_501R_R_LEG_FOOT",
                 ),
                 floor_geom_names=("floor",),
-                scale=3.0,  # Increased from 2.0
+                scale=8.0,  # Important for standing stability
             ),
 
             FootStabilityReward.create(
@@ -235,41 +261,55 @@ class TQCHumanoidStandingTask(TQCHumanoidTask[TQCHumanoidConfig]):
                     "KB_D_501L_L_LEG_FOOT",
                     "KB_D_501R_R_LEG_FOOT"
                 ),
-                scale=2.0,  # Increased from 1.5
+                scale=4.0,
             ),
 
-            # 🚫 PENALTIES (Much smaller)
+            # 🎯 HEIGHT STABILIZATION (NEW)
+            ksim.BaseHeightRangeReward(
+                z_lower=0.85,
+                z_upper=1.05,
+                dropoff=25.0,  # Sharp penalty outside standing range
+                scale=15.0,  # Strong reward for being in standing zone
+            ),
+
+            ConditionalJointPositionReward.create(
+                physics_model=physics_model,
+                joint_positions=target_joint_positions,
+                min_height=0.88,  # Start applying pose reward at this height
+                max_height=1.02,  # Stop applying pose reward above this height
+                scale=30.0,  # Very strong when active
+            ),
+
+            # 🚫 DRASTIC MOVEMENT PENALTIES (INCREASED)
+            ksim.AngularVelocityPenalty(index=("x", "y", "z"), scale=-0.15),
+            ksim.LinearVelocityPenalty(index=("z"), scale=-0.3),
+
+            # 🚫 LARGE ACTION PENALTIES (INCREASED)
+            ksim.ActionAccelerationPenalty(scale=-0.08),
+            ksim.ActionJerkPenalty(scale=-0.03),
+            ksim.JointVelocityPenalty(scale=-0.015),
+            ksim.JointAccelerationPenalty(scale=-0.04),
+            ksim.JointJerkPenalty(scale=-0.04),
+
+            # 🚫 CONTACT PENALTIES
             ContactPenalty.create(
                 physics_model=physics_model,
                 body_names=(
-                    "Torso_Side_Right",  # This should penalize both torso and head contact
-                    # Add more body parts if you want to avoid other contacts
-                    #"imu",  # Head/IMU body (has head_collision_box)
-                    # Optionally add arm bodies to prevent arm-ground contact:
-                    # "KC_C_401R_R_UpForearmDrive",  # Right forearm
-                    # "KC_C_401L_L_UpForearmDrive",  # Left forearm
+                    "Torso_Side_Right",
+                    #"KC_C_401R_R_UpForearmDrive",
+                    #"KC_C_401L_L_UpForearmDrive",
                 ),
                 floor_geom_names=("floor",),
-                scale=-0.2,
+                scale=-1.5,
             ),
-            # ⚖️ SMOOTHNESS (Tiny penalties)
-            ksim.AngularVelocityPenalty(index=("x", "y"), scale=-0.04),  # Reduced from -0.02
-            ksim.LinearVelocityPenalty(index=("x", "y"), scale=-0.04),  # Reduced from -0.02
-            ksim.ActionAccelerationPenalty(scale=-0.02),  # Reduced from -0.005
-            ksim.ActionJerkPenalty(scale=-0.006),  # Reduced from -0.003
-            ksim.JointVelocityPenalty(scale=-0.001),  # Reduced from -0.005
-            ksim.JointAccelerationPenalty(scale=-0.01),  # Reduced from -0.005
-            ksim.JointJerkPenalty(scale=-0.01),  # Reduced from -0.003
 
-            # 🔋 ENERGY (Minimal)
-            ksim.CtrlPenalty(scale=-0.002),  # Reduced from -0.002
-            ksim.LinkAccelerationPenalty(scale=-0.01),  # Reduced from -0.005
-
-            # 🛡️ SAFETY (Reduced)
+            # 🔋 ENERGY PENALTIES
+            ksim.CtrlPenalty(scale=-0.02),
+            ksim.LinkAccelerationPenalty(scale=-0.03),
             ksim.AvoidLimitsPenalty.create(
                 model=physics_model,
                 factor=0.1,
-                scale=-0.01  # Reduced from -0.05
+                scale=-0.04
             ),
         ]
 
