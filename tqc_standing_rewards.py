@@ -7,7 +7,7 @@ import ksim
 import math
 
 import xax
-from ksim.types import Trajectory, PhysicsModel
+from ksim.types import Trajectory, PhysicsModel, PhysicsState
 from jaxtyping import Array, PRNGKeyArray, PyTree
 from ksim.types import PhysicsModel, Trajectory
 from ksim.utils.mujoco import get_geom_data_idx_from_name, get_body_data_idx_from_name
@@ -97,47 +97,80 @@ class SimpleHeadUprightReward(ksim.Reward):
 @attrs.define(frozen=True, kw_only=True)
 class FootContactReward(ksim.Reward):
     """Reward for keeping feet in contact with the ground."""
-
-    foot_geom_indices: tuple[int, ...] = attrs.field()
-    floor_geom_indices: tuple[int, ...] = attrs.field()
-    contact_threshold: float = attrs.field(default=0.1)  # Minimum contact force
+    foot_body_indices: tuple[int, ...] = attrs.field()
+    floor_z: float = attrs.field()
+    contact_threshold: float = attrs.field(default=0.05)
 
     def get_reward(self, trajectory: Trajectory) -> Array:
-        """Reward based on foot height (proxy for contact)."""
-        # Use base position as proxy for foot contact
-        # When robot is standing, base should be at stable height
-        base_height = trajectory.qpos[..., 2]  # Z-coordinate of base
+        """Reward based on actual foot body positions."""
 
-        # Reward stable height (around 0.5-1.0m for standing robot)
-        target_height = 0.7  # Adjust based on your robot
-        height_reward = jnp.exp(-jnp.abs(base_height - target_height) / 0.1)
+        # Get foot body positions from trajectory.xpos (this works!)
+        foot_rewards = []
 
-        # Also reward low base velocities (stable standing)
-        base_vel = trajectory.qvel[..., :3]  # Linear velocity
-        vel_norm = jnp.linalg.norm(base_vel, axis=-1)
-        stability_reward = jnp.exp(-vel_norm / 0.1)
+        for i, foot_idx in enumerate(self.foot_body_indices):
+            foot_pos = trajectory.xpos[..., foot_idx, :]
+            foot_z = foot_pos[..., 2]
 
-        # Combine both rewards
-        total_reward = height_reward * stability_reward
-        return total_reward
+            #jax.debug.print("Foot {} Z: {}", i, foot_z[0])
+
+            # Distance from foot to floor
+            foot_height = foot_z - self.floor_z
+            #jax.debug.print("Foot {} height above floor: {}", i, foot_height[0])
+
+            # Reward for being close to floor (contact)
+            contact_reward = jnp.exp(-jnp.maximum(foot_height, 0.0) / self.contact_threshold)
+            foot_rewards.append(contact_reward)
+
+        # Average reward across all feet
+        total_foot_reward = jnp.mean(jnp.stack(foot_rewards, axis=-1), axis=-1)
+
+        # Also reward stable base height
+        base_height = trajectory.qpos[..., 2]
+        height_above_floor = base_height - self.floor_z
+        target_height = 0.085  # Realistic target based on debug output
+
+        base_reward = jnp.exp(-jnp.abs(height_above_floor - target_height) / 0.02)
+
+        # Combine foot contact and base stability
+        combined_reward = 0.7 * total_foot_reward + 0.3 * base_reward
+
+        #jax.debug.print("Foot contact reward: {}", total_foot_reward[0])
+        #jax.debug.print("Base stability reward: {}", base_reward[0])
+        #jax.debug.print("Combined reward: {}", combined_reward[0])
+
+        return combined_reward
 
     @classmethod
     def create(
             cls,
             physics_model: PhysicsModel,
-            foot_geom_names: tuple[str, ...],
+            foot_body_names: tuple[str, ...],  # Use body names (this works!)
             floor_geom_names: tuple[str, ...],
             scale: float = 1.0,
-            contact_threshold: float = 0.1,
+            contact_threshold: float = 0.05,
             scale_by_curriculum: bool = False,
     ) -> "FootContactReward":
-        # Get geom indices
-        foot_indices = tuple([get_geom_data_idx_from_name(physics_model, name) for name in foot_geom_names])
-        floor_indices = tuple([get_geom_data_idx_from_name(physics_model, name) for name in floor_geom_names])
+        # Get foot body indices (not geom indices)
+        foot_body_indices = tuple([
+            get_body_data_idx_from_name(physics_model, name)
+            for name in foot_body_names
+        ])
+
+        # Get floor Z position
+        floor_indices = tuple([
+            get_geom_data_idx_from_name(physics_model, name)
+            for name in floor_geom_names
+        ])
+        floor_pos = physics_model.geom_pos[floor_indices[0]]
+        floor_z = float(floor_pos[2])
+
+        # Debug
+        #jax.debug.print("Foot body indices: {}", foot_body_indices)
+        #jax.debug.print("Floor Z coordinate: {}", floor_z)
 
         return cls(
-            foot_geom_indices=foot_indices,
-            floor_geom_indices=floor_indices,
+            foot_body_indices=foot_body_indices,
+            floor_z=floor_z,
             contact_threshold=contact_threshold,
             scale=scale,
             scale_by_curriculum=scale_by_curriculum,
@@ -147,43 +180,75 @@ class FootContactReward(ksim.Reward):
 @attrs.define(frozen=True, kw_only=True)
 class ContactPenalty(ksim.Reward):
     """Penalty for unwanted body parts touching the ground."""
-
-    geom_indices: tuple[int, ...] = attrs.field()
-    floor_geom_indices: tuple[int, ...] = attrs.field()
+    body_indices: tuple[int, ...] = attrs.field()  # Changed from geom_indices
+    floor_z: float = attrs.field()
     contact_threshold: float = attrs.field(default=0.05)
 
     def get_reward(self, trajectory: Trajectory) -> Array:
-        """Penalize base getting too close to ground (proxy for unwanted contact)."""
-        # Use base height as proxy for body contact
-        base_height = trajectory.qpos[..., 2]  # Z-coordinate
+        """Penalize specific body parts getting too close to ground."""
 
-        # Penalize if base is too low (indicates body parts touching ground)
-        min_height = 0.3  # Minimum safe height
-        contact_penalty = jnp.where(
-            base_height < min_height,
-            jnp.exp(-(base_height - min_height) / 0.05),  # Sharp penalty below threshold
-            0.0  # No penalty above threshold
-        )
+        # Check each unwanted body part for contact
+        contact_penalties = []
 
-        return contact_penalty
+        for i, body_idx in enumerate(self.body_indices):
+            # Get body part position from trajectory.xpos
+            body_pos = trajectory.xpos[..., body_idx, :]
+            body_z = body_pos[..., 2]
+
+            #jax.debug.print("Body part {} Z: {}", i, body_z[0])
+
+            # Distance from body part to floor
+            height_above_floor = body_z - self.floor_z
+            #jax.debug.print("Body part {} height above floor: {}", i, height_above_floor[0])
+
+            # Penalty for being too close to floor
+            min_safe_height = 0.15  # Minimum safe height for body parts
+            penalty = jnp.where(
+                height_above_floor < min_safe_height,
+                jnp.exp(-(height_above_floor - min_safe_height) / 0.02),  # Sharp penalty when close
+                0.0  # No penalty when safe distance
+            )
+
+            contact_penalties.append(penalty)
+
+        # Sum penalties (worse if multiple body parts contact)
+        total_penalty = jnp.sum(jnp.stack(contact_penalties, axis=-1), axis=-1)
+
+        #jax.debug.print("Total contact penalty: {}", total_penalty[0])
+
+        return total_penalty
 
     @classmethod
     def create(
             cls,
             physics_model: PhysicsModel,
-            geom_names: tuple[str, ...],
+            body_names: tuple[str, ...],  # Changed from geom_names
             floor_geom_names: tuple[str, ...] = ("floor",),
             scale: float = -1.0,
             contact_threshold: float = 0.05,
             scale_by_curriculum: bool = False,
     ) -> "ContactPenalty":
-        # Get geom indices
-        geom_indices = tuple([get_geom_data_idx_from_name(physics_model, name) for name in geom_names])
-        floor_indices = tuple([get_geom_data_idx_from_name(physics_model, name) for name in floor_geom_names])
+        # Get body indices (not geom indices)
+        body_indices = tuple([
+            get_body_data_idx_from_name(physics_model, name)
+            for name in body_names
+        ])
+
+        # Get floor Z position
+        floor_indices = tuple([
+            get_geom_data_idx_from_name(physics_model, name)
+            for name in floor_geom_names
+        ])
+        floor_pos = physics_model.geom_pos[floor_indices[0]]
+        floor_z = float(floor_pos[2])
+
+        # Debug
+        #jax.debug.print("Body indices: {}", body_indices)
+        #jax.debug.print("Floor Z coordinate: {}", floor_z)
 
         return cls(
-            geom_indices=geom_indices,
-            floor_geom_indices=floor_indices,
+            body_indices=body_indices,
+            floor_z=floor_z,
             contact_threshold=contact_threshold,
             scale=scale,
             scale_by_curriculum=scale_by_curriculum,
@@ -272,7 +337,7 @@ class MirrorSymmetryReward(ksim.Reward):
 
         # Return average symmetry across all joint pairs
         stacked_rewards = jnp.stack(symmetry_rewards, axis=-1)  # Shape: (batch_size, 10)
-        return (jnp.mean(stacked_rewards, axis=-1) ** 2) * 10 # Shape: (batch_size,) - preserves batch dimension
+        return (jnp.mean(stacked_rewards, axis=-1) ** 2) * 20 # Shape: (batch_size,) - preserves batch dimension
 
     @classmethod
     def create(

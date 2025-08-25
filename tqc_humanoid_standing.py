@@ -203,28 +203,27 @@ class TQCHumanoidStandingTask(TQCHumanoidTask[TQCHumanoidConfig]):
         """Rebalanced rewards: Strong positive signals, weak penalties."""
         return [
             # 🎯 PRIMARY OBJECTIVES (Much stronger)
-            MuJoCoStandupHeightReward(scale=10.0),  # Increased from 3.0 next to 10
+            MuJoCoStandupHeightReward(scale=15.0),  # Increased from 3.0 next to 10
             #SimpleUprightReward(scale=10.0),  # Increased from 3.0
             SimpleHeadUprightReward.create(
                 physics_model=physics_model,
                 imu_body_name="Torso_Side_Right",
-                scale=7.0,#next to 22
+                scale=22.0,#next to 22
             ),
 
             # 🤖 SUPPORTING OBJECTIVES
             MirrorSymmetryReward.create(
                 physics_model=physics_model,
-                scale=15.0,  # Increased from 2.0 next to 22
+                scale=22.0,  # Increased from 2.0 next to 22
                 tolerance=0.1,  # Tighter from 0.2
             ),
 
             FootContactReward.create(
                 physics_model=physics_model,
-                foot_geom_names=(
-                    "KB_D_501L_L_LEG_FOOT_collision_capsule_0",
-                    "KB_D_501L_L_LEG_FOOT_collision_capsule_1",
-                    "KB_D_501R_R_LEG_FOOT_collision_capsule_0",
-                    "KB_D_501R_R_LEG_FOOT_collision_capsule_1"
+                foot_body_names=(
+                    "KB_D_501L_L_LEG_FOOT",  # body name (remove _collision_capsule_0/1)
+                    "KB_D_501R_R_LEG_FOOT",  # body name
+                    # Or whatever the actual foot body names are
                 ),
                 floor_geom_names=("floor",),
                 scale=3.0,  # Increased from 2.0
@@ -242,11 +241,17 @@ class TQCHumanoidStandingTask(TQCHumanoidTask[TQCHumanoidConfig]):
             # 🚫 PENALTIES (Much smaller)
             ContactPenalty.create(
                 physics_model=physics_model,
-                geom_names=("torso_collision_box", "head_collision_box"),
+                body_names=(
+                    "Torso_Side_Right",  # This should penalize both torso and head contact
+                    # Add more body parts if you want to avoid other contacts
+                    #"imu",  # Head/IMU body (has head_collision_box)
+                    # Optionally add arm bodies to prevent arm-ground contact:
+                    # "KC_C_401R_R_UpForearmDrive",  # Right forearm
+                    # "KC_C_401L_L_UpForearmDrive",  # Left forearm
+                ),
                 floor_geom_names=("floor",),
-                scale=-0.2,  # Reduced from -1.0
+                scale=-0.2,
             ),
-
             # ⚖️ SMOOTHNESS (Tiny penalties)
             ksim.AngularVelocityPenalty(index=("x", "y"), scale=-0.04),  # Reduced from -0.02
             ksim.LinearVelocityPenalty(index=("x", "y"), scale=-0.04),  # Reduced from -0.02
@@ -274,7 +279,7 @@ class TQCHumanoidStandingTask(TQCHumanoidTask[TQCHumanoidConfig]):
         """Get termination conditions - more forgiving for standing."""
         return [
             # More forgiving height limits for standing attempts
-            ksim.BadZTermination(unhealthy_z_lower=-0.1, unhealthy_z_upper=1.5),
+            ksim.BadZTermination(unhealthy_z_lower=-0.1, unhealthy_z_upper=1.2),
             ksim.FarFromOriginTermination(max_dist=2.0),  # Allow some movement during standing
         ]
 
