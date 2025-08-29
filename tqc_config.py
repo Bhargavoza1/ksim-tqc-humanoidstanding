@@ -129,7 +129,7 @@ class TQCHumanoidConfig(RLConfig):
 
     # Replay buffer - SB3-like defaults
     buffer_size: int = xax.field(
-        value=1_000_000,
+        value=100_000,
         help="Replay buffer size.",
     )
     min_buffer_size: int = xax.field(
@@ -155,7 +155,7 @@ class TQCHumanoidConfig(RLConfig):
         help="Use mutable buffer for better performance (recommended for large buffers).",
     )
     mutable_buffer_threshold: int = xax.field(
-        value=100_000,
+        value=50_000,
         help="Automatically use mutable buffer for sizes above this threshold.",
     )
 

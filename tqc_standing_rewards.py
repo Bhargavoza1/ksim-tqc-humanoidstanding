@@ -18,7 +18,7 @@ class MuJoCoStandupHeightReward(ksim.Reward):
     """Enhanced MuJoCo Standup v5 height reward with target height and stabilization."""
     dt: float = attrs.field(default=0.02)
     target_height: float = attrs.field(default=0.95)  # Target standing height
-    max_reward_height: float = attrs.field(default=1.1)  # Cap reward above this height
+    max_reward_height: float = attrs.field(default=0.96)  # Cap reward above this height
     stabilization_zone: float = attrs.field(default=0.1)  # Zone around target for stabilization
 
     def get_reward(self, trajectory: ksim.Trajectory) -> Array:
@@ -103,9 +103,9 @@ class SimpleHeadUprightReward(ksim.Reward):
 
         # Reward when head Z-axis points up (1.0 = perfectly upright, 0.0 = sideways)
         uprightness = jnp.maximum(0.0, global_z[..., 2])
-
+        total = uprightness ** 2
         # Square it for sharper reward
-        return uprightness ** 2
+        return total
 
     @classmethod
     def create(
@@ -133,43 +133,29 @@ class FootContactReward(ksim.Reward):
     contact_threshold: float = attrs.field(default=0.05)
 
     def get_reward(self, trajectory: Trajectory) -> Array:
-        """Reward based on actual foot body positions."""
-
-        # Get foot body positions from trajectory.xpos (this works!)
+        """Reward for both feet maintaining ground contact."""
         foot_rewards = []
 
         for i, foot_idx in enumerate(self.foot_body_indices):
             foot_pos = trajectory.xpos[..., foot_idx, :]
             foot_z = foot_pos[..., 2]
-
-            #jax.debug.print("Foot {} Z: {}", i, foot_z[0])
-
-            # Distance from foot to floor
             foot_height = foot_z - self.floor_z
-            #jax.debug.print("Foot {} height above floor: {}", i, foot_height[0])
 
-            # Reward for being close to floor (contact)
+            # Strong reward for foot being on or very close to ground
             contact_reward = jnp.exp(-jnp.maximum(foot_height, 0.0) / self.contact_threshold)
             foot_rewards.append(contact_reward)
 
-        # Average reward across all feet
-        total_foot_reward = jnp.mean(jnp.stack(foot_rewards, axis=-1), axis=-1)
+        # For both feet on ground, multiply rewards instead of averaging
+        # This ensures maximum reward only when BOTH feet are in contact
+        foot_rewards_stacked = jnp.stack(foot_rewards, axis=-1)
 
-        # Also reward stable base height
-        base_height = trajectory.qpos[..., 2]
-        height_above_floor = base_height - self.floor_z
-        target_height = 0.085  # Realistic target based on debug output
+        # Option 1: Multiply rewards (both feet must be down)
+        both_feet_contact = jnp.prod(foot_rewards_stacked, axis=-1)
 
-        base_reward = jnp.exp(-jnp.abs(height_above_floor - target_height) / 0.02)
+        # Option 2: Minimum of the two (weakest link approach)
+        # both_feet_contact = jnp.min(foot_rewards_stacked, axis=-1)
 
-        # Combine foot contact and base stability
-        combined_reward = 0.7 * total_foot_reward + 0.3 * base_reward
-
-        #jax.debug.print("Foot contact reward: {}", total_foot_reward[0])
-        #jax.debug.print("Base stability reward: {}", base_reward[0])
-        #jax.debug.print("Combined reward: {}", combined_reward[0])
-
-        return combined_reward
+        return both_feet_contact
 
     @classmethod
     def create(
@@ -368,7 +354,8 @@ class MirrorSymmetryReward(ksim.Reward):
 
         # Return average symmetry across all joint pairs
         stacked_rewards = jnp.stack(symmetry_rewards, axis=-1)  # Shape: (batch_size, 10)
-        return (jnp.mean(stacked_rewards, axis=-1) ** 2) * 20 # Shape: (batch_size,) - preserves batch dimension
+        total =  (jnp.mean(stacked_rewards, axis=-1) ** 2) * 20 # Shape: (batch_size,) - preserves batch dimension
+        return total
 
     @classmethod
     def create(
@@ -430,7 +417,7 @@ class ConditionalJointPositionReward(ksim.Reward):
         joint_reward = jnp.exp(-jnp.sum(jnp.square(joint_errors), axis=-1) / 0.1)
 
         # Apply height-based activation
-        final_reward = joint_reward * height_factor
+        final_reward = (joint_reward * height_factor )* 20
 
         #jax.debug.print("Base height: {}", base_height[0])
         #jax.debug.print("Height factor: {}", height_factor[0])

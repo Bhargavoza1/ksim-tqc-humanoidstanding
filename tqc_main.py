@@ -25,7 +25,7 @@ def main_standing():
 
 
             learning_rate_actor=1e-4,
-            learning_rate_critic=1e-4,
+            learning_rate_critic=3e-4,
             learning_rate_temp=3e-4,
             #use_circular_gradients=False,  # Use stable detached gradients
             #learning_rate_temp_circular=3e-4,
