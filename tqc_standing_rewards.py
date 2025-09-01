@@ -16,7 +16,7 @@ from ksim.utils.mujoco import get_geom_data_idx_from_name, get_body_data_idx_fro
 @attrs.define(frozen=True, kw_only=True)
 class MuJoCoStandupHeightReward(ksim.Reward):
     """Enhanced MuJoCo Standup v5 height reward with target height and stabilization."""
-    dt: float = attrs.field(default=0.02)
+    #dt: float = attrs.field(default=0.02)
     target_height: float = attrs.field(default=0.95)  # Target standing height
     max_reward_height: float = attrs.field(default=0.96)  # Cap reward above this height
     stabilization_zone: float = attrs.field(default=0.1)  # Zone around target for stabilization
@@ -25,8 +25,7 @@ class MuJoCoStandupHeightReward(ksim.Reward):
         height = trajectory.qpos[..., 2]  # z-coordinate (base height)
 
         # Original MuJoCo reward: height / dt (encourages getting higher)
-        base_reward = height / self.dt
-
+        base_reward = height * 10.0
         # Add stabilization component when near target
         distance_from_target = jnp.abs(height - self.target_height)
 
@@ -354,7 +353,7 @@ class MirrorSymmetryReward(ksim.Reward):
 
         # Return average symmetry across all joint pairs
         stacked_rewards = jnp.stack(symmetry_rewards, axis=-1)  # Shape: (batch_size, 10)
-        total =  (jnp.mean(stacked_rewards, axis=-1) ** 2) * 20 # Shape: (batch_size,) - preserves batch dimension
+        total =  (jnp.mean(stacked_rewards, axis=-1) ** 2) * 10 # Shape: (batch_size,) - preserves batch dimension
         return total
 
     @classmethod

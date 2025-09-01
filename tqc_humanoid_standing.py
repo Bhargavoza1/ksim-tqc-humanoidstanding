@@ -229,20 +229,20 @@ class TQCHumanoidStandingTask(TQCHumanoidTask[TQCHumanoidConfig]):
             # 🎯 PRIMARY OBJECTIVES (Height-aware scaling)
             MuJoCoStandupHeightReward(
                 target_height=0.95,  # Primary goal: reach standing height
-                scale=12.0,  # High priority for standing up
+                scale=16.0,  # High priority for standing up
             ),
 
             SimpleHeadUprightReward.create(
                 physics_model=physics_model,
                 imu_body_name="Torso_Side_Right",
-                scale=15.0,
+                scale=3.0,
             ),
 
             # 🤖 SUPPORTING OBJECTIVES
             MirrorSymmetryReward.create(
                 physics_model=physics_model,
-                scale=5,  # Reduced since conditional pose reward handles this
-                tolerance=0.25,
+                scale=3,  # Reduced since conditional pose reward handles this
+                tolerance=0.4,
             ),
 
             FootContactReward.create(
@@ -252,7 +252,7 @@ class TQCHumanoidStandingTask(TQCHumanoidTask[TQCHumanoidConfig]):
                     "KB_D_501R_R_LEG_FOOT",
                 ),
                 floor_geom_names=("floor",),
-                scale=30.0,  # Important for standing stability
+                scale=15.0,  # Important for standing stability
             ),
 
             FootStabilityReward.create(
@@ -261,7 +261,7 @@ class TQCHumanoidStandingTask(TQCHumanoidTask[TQCHumanoidConfig]):
                     "KB_D_501L_L_LEG_FOOT",
                     "KB_D_501R_R_LEG_FOOT"
                 ),
-                scale=15.0,
+                scale=10.0,
             ),
 
             # 🎯 HEIGHT STABILIZATION (NEW)
@@ -275,21 +275,21 @@ class TQCHumanoidStandingTask(TQCHumanoidTask[TQCHumanoidConfig]):
             ConditionalJointPositionReward.create(
                 physics_model=physics_model,
                 joint_positions=target_joint_positions,
-                min_height=0.75,  # Start applying pose reward at this height
-                max_height=1.02,  # Stop applying pose reward above this height
+                min_height=0.65,  # Start applying pose reward at this height
+                max_height=1.00,  # Stop applying pose reward above this height
                 scale=100.0,  # Very strong when active
             ),
 
             # 🚫 DRASTIC MOVEMENT PENALTIES (INCREASED)
-            ksim.AngularVelocityPenalty(index=("x", "y", "z"), scale=-0.15),
-            ksim.LinearVelocityPenalty(index=("z"), scale=-2.0),
+            ksim.AngularVelocityPenalty(index=("x", "y", "z"), scale=-0.02),
+            ksim.LinearVelocityPenalty(index=("z"), scale=-0.05),
 
             # 🚫 LARGE ACTION PENALTIES (INCREASED)
-            ksim.ActionAccelerationPenalty(scale=-0.08),
-            ksim.ActionJerkPenalty(scale=-0.03),
-            ksim.JointVelocityPenalty(scale=-0.015),
-            ksim.JointAccelerationPenalty(scale=-0.04),
-            ksim.JointJerkPenalty(scale=-0.04),
+            ksim.ActionAccelerationPenalty(scale=-0.002),
+            #ksim.ActionJerkPenalty(scale=-0.03),
+            ksim.JointVelocityPenalty(scale=-0.001),
+            #ksim.JointAccelerationPenalty(scale=-0.04),
+            #ksim.JointJerkPenalty(scale=-0.04),
 
             # 🚫 CONTACT PENALTIES
             ContactPenalty.create(
@@ -300,16 +300,16 @@ class TQCHumanoidStandingTask(TQCHumanoidTask[TQCHumanoidConfig]):
                     #"KC_C_401L_L_UpForearmDrive",
                 ),
                 floor_geom_names=("floor",),
-                scale=-1.5,
+                scale=-1,
             ),
 
             # 🔋 ENERGY PENALTIES
-            ksim.CtrlPenalty(scale=-0.02),
-            ksim.LinkAccelerationPenalty(scale=-0.03),
+            ksim.CtrlPenalty(scale=-0.003),
+            ksim.LinkAccelerationPenalty(scale=-0.01),
             ksim.AvoidLimitsPenalty.create(
                 model=physics_model,
                 factor=0.1,
-                scale=-0.04
+                scale=-0.02
             ),
         ]
 
