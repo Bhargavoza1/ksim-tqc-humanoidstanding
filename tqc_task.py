@@ -1,6 +1,7 @@
 """Main TQC task implementation with CIRCULAR GRADIENT SUPPORT."""
 
 import asyncio
+import functools
 import math
 import signal
 import textwrap
@@ -53,32 +54,48 @@ class TQCHumanoidTask(RLTask[Config], Generic[Config], ABC):
     """Complete TQC task with circular gradient support."""
 
     def __init__(self, config: Config):
-        super().__init__(config)
+        # Store the original TQC batch size before any modifications
+        self.tqc_batch_size = config.batch_size
+
+        # Find a framework-compatible batch size (largest divisor of num_envs)
+        framework_batch_size = self._find_framework_batch_size(config.num_envs, config.batch_size)
+
+        # Create a modified config for the parent class to satisfy framework constraint
+        framework_config = replace(config, batch_size=framework_batch_size)
+
+        # Call parent's __init__ with framework-compatible config
+        super().__init__(framework_config)
+
+        # Store original config for TQC operations
+        self.original_config = config
+
+        print(f"Framework batch_size: {framework_batch_size} (for {config.num_envs} envs)")
+        print(f"TQC training batch_size: {self.tqc_batch_size}")
+
         # Use functional buffer for JAX compatibility
         actor_obs_dim = 51 if config.use_acc_gyro else 45
-        critic_obs_dim = 462 # Rich state representation
+        critic_obs_dim = 462  # Rich state representation
         action_dim = len(ZEROS)
 
-        # 🚀 COMPUTE AUTO TARGET ENTROPY
+        # Compute auto target entropy
         self.action_dim = action_dim
         self.target_entropy_value = config.get_target_entropy(action_dim)
-        #self.target_entropy_value = float(-15.0)
 
-        print(f"🎯 Target entropy: {self.target_entropy_value:.2f} " +
+        print(f"Target entropy: {self.target_entropy_value:.2f} " +
               f"({'auto (-action_dim)' if config.target_entropy == 'auto' else 'manual'})")
-        print(f"🌡️  Entropy coef: {'auto (learnable)' if config.use_auto_entropy() else 'manual'}")
+        print(f"Entropy coef: {'auto (learnable)' if config.use_auto_entropy() else 'manual'}")
 
-        # 🔄 CIRCULAR GRADIENT SETUP
+        # Circular gradient setup
         if config.use_circular_gradients:
-            print(f"🔄 CIRCULAR GRADIENTS: ENABLED (EXPERIMENTAL)")
-            print(f"   ⚠️  This allows temperature gradients to flow through actor/critic losses")
-            print(f"   📉 Reduced learning rates for stability:")
+            print(f"CIRCULAR GRADIENTS: ENABLED (EXPERIMENTAL)")
+            print(f"   This allows temperature gradients to flow through actor/critic losses")
+            print(f"   Reduced learning rates for stability:")
             print(f"      - Actor: {config.learning_rate_actor} × {config.circular_actor_lr_scale}")
             print(f"      - Critic: {config.learning_rate_critic} × {config.circular_critic_lr_scale}")
             print(f"      - Temperature: {config.learning_rate_temp_circular}")
-            print(f"   ✂️  Gradient clipping: {config.gradient_clip_circular}")
+            print(f"   Gradient clipping: {config.gradient_clip_circular}")
         else:
-            print(f"🛡️  DETACHED GRADIENTS: Standard mode (recommended)")
+            print(f"DETACHED GRADIENTS: Standard mode (recommended)")
 
         # Always use functional buffer for JAX compatibility
         self.replay_buffer = TQCReplayBuffer(
@@ -89,14 +106,70 @@ class TQCHumanoidTask(RLTask[Config], Generic[Config], ABC):
         # Pre-compute quantile levels for TQC
         self.tau = create_quantile_levels(config.num_quantiles)
 
-        print(f"🎯 Using functional TQCReplayBuffer: {config.buffer_size:,} transitions")
-        print(f"📊 Actor obs: {actor_obs_dim}D, Critic obs: {critic_obs_dim}D, Actions: {action_dim}D")
-        print(f"🔧 Buffer type: {self.buffer_type} (JAX JIT compatible)")
-        print(f"🔧 TQC: {config.num_critics} critics × {config.num_quantiles} quantiles = {config.num_critics * config.num_quantiles} total quantiles")
+        print(f"Using functional TQCReplayBuffer: {config.buffer_size:,} transitions")
+        print(f"Actor obs: {actor_obs_dim}D, Critic obs: {critic_obs_dim}D, Actions: {action_dim}D")
+        print(f"Buffer type: {self.buffer_type} (JAX JIT compatible)")
+        print(
+            f"TQC: {config.num_critics} critics × {config.num_quantiles} quantiles = {config.num_critics * config.num_quantiles} total quantiles")
 
         if config.buffer_size > 500_000:
-            print(f"⚠️  Large buffer size ({config.buffer_size:,}) - functional buffers use more memory")
+            print(f"Large buffer size ({config.buffer_size:,}) - functional buffers use more memory")
             print("   Consider reducing buffer_size for better memory efficiency")
+
+    def _find_framework_batch_size(self, num_envs: int, desired_batch_size: int) -> int:
+        """Find largest valid batch size that divides num_envs."""
+        # Get all divisors of num_envs
+        divisors = [i for i in range(1, num_envs + 1) if num_envs % i == 0]
+
+        # Return the largest divisor that's <= desired_batch_size
+        valid_divisors = [d for d in divisors if d <= desired_batch_size]
+
+        if valid_divisors:
+            return max(valid_divisors)
+        else:
+            # If desired batch is smaller than smallest divisor, use smallest
+            return min(divisors)
+
+    @property
+    def batch_size(self) -> int:
+        """Return TQC batch size for training operations."""
+        return self.tqc_batch_size
+
+    @functools.cached_property
+    def rollout_num_samples(self) -> int:
+        """Return TQC training samples per rollout step."""
+
+        # Environment sample collection
+        env_samples = self.rollout_length_steps * self.config.num_envs
+
+        # Training configuration values
+        gradient_steps = getattr(self.config, 'gradient_steps', 1)
+        critic_updates = getattr(self.config, 'critic_updates_per_step', 1)
+        tqc_batch = getattr(self, 'tqc_batch_size', self.config.batch_size)
+        rollout_length = self.rollout_length_steps
+
+        print(f"DEBUG rollout_num_samples:")
+        print(f"  Environment: num_envs={self.config.num_envs}, rollout_length={rollout_length}")
+        print(f"  env_samples = {self.config.num_envs} × {rollout_length} = {env_samples}")
+        print(
+            f"  Training: gradient_steps={gradient_steps}, critic_updates={critic_updates}, tqc_batch_size={tqc_batch}")
+
+        # Training sample calculations
+        total_critic_samples = critic_updates * tqc_batch
+        total_actor_samples = tqc_batch
+        samples_per_gradient_step = total_critic_samples + total_actor_samples
+        total_training_samples = gradient_steps * samples_per_gradient_step
+
+        print(f"  Critic samples per gradient step: {critic_updates} × {tqc_batch} = {total_critic_samples}")
+        print(f"  Actor samples per gradient step: {tqc_batch}")
+        print(f"  Total per gradient step: {total_critic_samples} + {tqc_batch} = {samples_per_gradient_step}")
+        print(f"  Total training samples: {gradient_steps} × {samples_per_gradient_step} = {total_training_samples}")
+
+        # Combined total
+        combined_total = env_samples + total_training_samples
+        print(f"  FINAL: env_samples({env_samples}) + training_samples({total_training_samples}) = {combined_total}")
+
+        return combined_total
 
     @abstractmethod
     def get_tqc_variables(
