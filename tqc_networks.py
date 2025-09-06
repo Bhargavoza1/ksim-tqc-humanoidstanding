@@ -22,15 +22,15 @@ class TqcActor(eqx.Module):
     # Trainable parameters
     action_scale: Array  # Trainable scaling
 
-    # Static configuration
-    action_bias: Array = eqx.static_field()
+    # Static configuration (Python primitives and lists only)
+    action_bias_list: List[float] = eqx.static_field()
+    joint_limits_low_list: List[float] = eqx.static_field()
+    joint_limits_high_list: List[float] = eqx.static_field()
+    action_low_list: List[float] = eqx.static_field()
+    action_high_list: List[float] = eqx.static_field()
     num_inputs: int = eqx.static_field()
     num_outputs: int = eqx.static_field()
     layer_sizes: List[int] = eqx.static_field()
-    action_low: Array = eqx.static_field()
-    action_high: Array = eqx.static_field()
-    joint_limits_low: Array = eqx.static_field()
-    joint_limits_high: Array = eqx.static_field()
     use_layer_norm: bool = eqx.static_field()
     max_scale: float = eqx.static_field()
 
@@ -101,23 +101,23 @@ class TqcActor(eqx.Module):
         self.num_outputs = num_outputs
         self.max_scale = max_scale
 
-        # Define joint limits (original robot limits)
-        self.joint_limits_low = jnp.array([
+        # Define joint limits as Python lists (static-safe)
+        self.joint_limits_low_list = [
             math.radians(-180), math.radians(-95), math.radians(-95), math.radians(0), math.radians(-100),
             math.radians(-80), math.radians(-20), math.radians(-95), math.radians(-142), math.radians(-100),
             math.radians(-127), math.radians(-130), math.radians(-90), math.radians(-155), math.radians(-13),
             math.radians(-60), math.radians(-12), math.radians(-90), math.radians(0), math.radians(-72)
-        ])
+        ]
 
-        self.joint_limits_high = jnp.array([
+        self.joint_limits_high_list = [
             math.radians(80), math.radians(20), math.radians(95), math.radians(142), math.radians(100),
             math.radians(180), math.radians(95), math.radians(95), math.radians(0), math.radians(100),
             math.radians(60), math.radians(12), math.radians(90), math.radians(0), math.radians(72),
             math.radians(127), math.radians(130), math.radians(90), math.radians(155), math.radians(13)
-        ])
+        ]
 
-        # Define desired standing pose bias
-        self.action_bias = jnp.array([
+        # Define desired standing pose bias as Python list
+        self.action_bias_list = [
             0.0,  # dof_right_shoulder_pitch_03
             math.radians(-10.0),  # dof_right_shoulder_roll_03
             0.0,  # dof_right_shoulder_yaw_02
@@ -138,11 +138,11 @@ class TqcActor(eqx.Module):
             0.0,  # dof_left_hip_yaw_03
             math.radians(50.0),  # dof_left_knee_04
             math.radians(-30.0),  # dof_left_ankle_02
-        ])
+        ]
 
-        # Adjust action limits to account for bias
-        self.action_low = self.joint_limits_low - self.action_bias
-        self.action_high = self.joint_limits_high - self.action_bias
+        # Calculate action limits as Python lists
+        self.action_low_list = [low - bias for low, bias in zip(self.joint_limits_low_list, self.action_bias_list)]
+        self.action_high_list = [high - bias for high, bias in zip(self.joint_limits_high_list, self.action_bias_list)]
 
         # Initialize log_std layer with conservative values
         self.log_std_layer = eqx.tree_at(
@@ -199,6 +199,13 @@ class TqcActor(eqx.Module):
             deterministic: bool = False
     ) -> tuple[chex.Array, chex.Array]:
         """Sample action and compute log probability with proper bias handling."""
+        # Convert static lists to JAX arrays for computation
+        action_bias = jnp.array(self.action_bias_list)
+        joint_limits_low = jnp.array(self.joint_limits_low_list)
+        joint_limits_high = jnp.array(self.joint_limits_high_list)
+        action_low = jnp.array(self.action_low_list)
+        action_high = jnp.array(self.action_high_list)
+
         carry = jnp.zeros(1)
         dist, _ = self.forward(obs, carry)
 
@@ -212,17 +219,17 @@ class TqcActor(eqx.Module):
         tanh_action = jnp.tanh(raw_action)
 
         # Compute action ranges (accounting for bias adjustment)
-        negative_range = jnp.maximum(jnp.abs(self.action_low), 0.001)  # Avoid zero
-        positive_range = jnp.maximum(self.action_high, 0.001)  # Avoid zero
+        negative_range = jnp.maximum(jnp.abs(action_low), 0.001)  # Avoid zero
+        positive_range = jnp.maximum(action_high, 0.001)  # Avoid zero
 
         # Scale based on sign of tanh output
         action_range = jnp.where(tanh_action < 0, negative_range, positive_range)
 
         # Apply scaling and bias
-        scaled_action = tanh_action * action_range + self.action_bias
+        scaled_action = tanh_action * action_range + action_bias
 
         # Final action (with safety clipping to joint limits)
-        action = jnp.clip(scaled_action, self.joint_limits_low, self.joint_limits_high)
+        action = jnp.clip(scaled_action, joint_limits_low, joint_limits_high)
 
         # Compute log probability
         log_prob = dist.log_prob(raw_action)

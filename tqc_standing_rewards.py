@@ -371,14 +371,14 @@ class MirrorSymmetryReward(ksim.Reward):
         )
 
 
+
+
 @attrs.define(frozen=True, kw_only=True)
 class ConditionalJointPositionReward(ksim.Reward):
     """Joint position reward that only activates when robot is standing at correct height."""
-    joint_indices: tuple[int, ...] = attrs.field()
-    joint_targets: tuple[float, ...] = attrs.field()
-    min_height: float = attrs.field(default=0.85)  # Minimum height to activate
-    max_height: float = attrs.field(default=1.05)  # Maximum height to activate
-    height_ramp_width: float = attrs.field(default=0.05)  # Smooth activation zone
+    min_height: float = attrs.field(default=0.85)
+    max_height: float = attrs.field(default=1.05)
+    tolerance: float = attrs.field(default=0.3)  # Similar to symmetry reward
 
     def get_reward(self, trajectory: Trajectory) -> Array:
         """Joint position reward that ramps up when robot reaches standing height."""
@@ -386,42 +386,60 @@ class ConditionalJointPositionReward(ksim.Reward):
         # Get current base height
         base_height = trajectory.qpos[..., 2]
 
-        # Create height-based activation mask
-        # Smoothly ramp up reward as robot enters the good height zone
+        # Height-based activation (simplified)
         height_factor = jnp.where(
-            base_height < self.min_height - self.height_ramp_width,
-            0.0,  # No joint reward when too low
-            jnp.where(
-                base_height > self.max_height + self.height_ramp_width,
-                0.0,  # No joint reward when too high
-                jnp.where(
-                    (base_height >= self.min_height) & (base_height <= self.max_height),
-                    1.0,  # Full joint reward in good height zone
-                    # Smooth ramp in transition zones
-                    jnp.where(
-                        base_height < self.min_height,
-                        (base_height - (self.min_height - self.height_ramp_width)) / self.height_ramp_width,
-                        (self.max_height + self.height_ramp_width - base_height) / self.height_ramp_width
-                    )
-                )
-            )
+            (base_height >= self.min_height) & (base_height <= self.max_height),
+            1.0,
+            0.0
         )
 
-        # Get joint positions and calculate deviation from targets
-        joint_positions = trajectory.qpos[..., 7:]  # Skip base position/rotation
-        joint_subset = joint_positions[..., jnp.array(self.joint_indices)]
+        # Get joint positions (same as symmetry reward)
+        joint_pos = trajectory.qpos[..., 7:]  # Skip base position/orientation (first 7)
 
-        # Calculate joint position error
-        joint_errors = joint_subset - jnp.array(self.joint_targets)
-        joint_reward = jnp.exp(-jnp.sum(jnp.square(joint_errors), axis=-1) / 0.1)
+        # Target joint positions (hardcoded indices like symmetry reward)
+        # Based on your target_joint_positions dict, in order:
+        target_positions = jnp.array([
+            0.0,                    # right_shoulder_pitch
+            math.radians(-10.0),    # right_shoulder_roll
+            0.0,                    # right_shoulder_yaw
+            math.radians(90.0),     # right_elbow
+            0.0,                    # right_wrist
+            0.0,                    # left_shoulder_pitch
+            math.radians(10.0),     # left_shoulder_roll
+            0.0,                    # left_shoulder_yaw
+            math.radians(-90.0),    # left_elbow
+            0.0,                    # left_wrist
+            math.radians(-20.0),    # right_hip_pitch
+            math.radians(0.0),      # right_hip_roll
+            0.0,                    # right_hip_yaw
+            math.radians(-50.0),    # right_knee
+            math.radians(30.0),     # right_ankle
+            math.radians(20.0),     # left_hip_pitch
+            math.radians(0.0),      # left_hip_roll
+            0.0,                    # left_hip_yaw
+            math.radians(50.0),     # left_knee
+            math.radians(-30.0),    # left_ankle
+        ])
+
+        # Calculate joint position rewards (same pattern as symmetry)
+        joint_rewards = []
+        for i in range(len(target_positions)):
+            joint_error = jnp.abs(joint_pos[..., i] - target_positions[i])
+            joint_reward = jnp.exp(-joint_error / self.tolerance)
+            joint_rewards.append(joint_reward)
+
+        # Stack and average (same as symmetry reward)
+        stacked_rewards = jnp.stack(joint_rewards, axis=-1)
+        joint_reward_total = jnp.mean(stacked_rewards, axis=-1)
 
         # Apply height-based activation
-        final_reward = (joint_reward * height_factor )* 20
+        final_reward = joint_reward_total * height_factor * 10.0
 
-        #jax.debug.print("Base height: {}", base_height[0])
-        #jax.debug.print("Height factor: {}", height_factor[0])
-        #jax.debug.print("Joint reward: {}", joint_reward[0])
-        #jax.debug.print("Final conditional reward: {}", final_reward[0])
+        # Debug output
+        #jax.debug.print("Base height: {:.3f}", base_height[0])
+        #jax.debug.print("Height factor: {:.3f}", height_factor[0])
+        #jax.debug.print("Joint reward total: {:.6f}", joint_reward_total[0])
+        #jax.debug.print("Final conditional reward: {:.3f}", final_reward[0])
 
         return final_reward
 
@@ -429,25 +447,16 @@ class ConditionalJointPositionReward(ksim.Reward):
     def create(
             cls,
             physics_model: PhysicsModel,
-            joint_positions: dict[str, float],
-            min_height: float = 0.85,
-            max_height: float = 1.05,
+            min_height: float = 0.65,
+            max_height: float = 1.00,
+            tolerance: float = 0.3,
             scale: float = 1.0,
             scale_by_curriculum: bool = False,
     ) -> "ConditionalJointPositionReward":
-        # Get joint indices
-        joint_to_idx = get_qpos_data_idxs_by_name(physics_model)
-        joint_indices = tuple([
-            int(joint_to_idx[name][0]) - 7  # Subtract 7 for base offset
-            for name in joint_positions.keys()
-        ])
-        joint_targets = tuple(joint_positions.values())
-
         return cls(
-            joint_indices=joint_indices,
-            joint_targets=joint_targets,
             min_height=min_height,
             max_height=max_height,
+            tolerance=tolerance,
             scale=scale,
             scale_by_curriculum=scale_by_curriculum,
         )

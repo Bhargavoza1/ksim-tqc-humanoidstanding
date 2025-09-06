@@ -202,34 +202,12 @@ class TQCHumanoidStandingTask(TQCHumanoidTask[TQCHumanoidConfig]):
     def get_rewards(self, physics_model: ksim.PhysicsModel) -> list[ksim.Reward]:
         """Rebalanced rewards with height stabilization and drastic move penalties."""
 
-        target_joint_positions = {
-            "dof_right_shoulder_pitch_03": 0.0,
-            "dof_right_shoulder_roll_03": math.radians(-10.0),
-            "dof_right_shoulder_yaw_02": 0.0,
-            "dof_right_elbow_02": math.radians(90.0),
-            "dof_right_wrist_00": 0.0,
-            "dof_left_shoulder_pitch_03": 0.0,
-            "dof_left_shoulder_roll_03": math.radians(10.0),
-            "dof_left_shoulder_yaw_02": 0.0,
-            "dof_left_elbow_02": math.radians(-90.0),
-            "dof_left_wrist_00": 0.0,
-            "dof_right_hip_pitch_04": math.radians(-20.0),
-            "dof_right_hip_roll_03": math.radians(0.0),
-            "dof_right_hip_yaw_03": 0.0,
-            "dof_right_knee_04": math.radians(-50.0),
-            "dof_right_ankle_02": math.radians(30.0),
-            "dof_left_hip_pitch_04": math.radians(20.0),
-            "dof_left_hip_roll_03": math.radians(0.0),
-            "dof_left_hip_yaw_03": 0.0,
-            "dof_left_knee_04": math.radians(50.0),
-            "dof_left_ankle_02": math.radians(-30.0),
-        }
 
         return [
             # 🎯 PRIMARY OBJECTIVES (Height-aware scaling)
             MuJoCoStandupHeightReward(
                 target_height=0.95,  # Primary goal: reach standing height
-                scale=16.0,  # High priority for standing up
+                scale=50.0,  # High priority for standing up
             ),
 
             SimpleHeadUprightReward.create(
@@ -252,7 +230,7 @@ class TQCHumanoidStandingTask(TQCHumanoidTask[TQCHumanoidConfig]):
                     "KB_D_501R_R_LEG_FOOT",
                 ),
                 floor_geom_names=("floor",),
-                scale=15.0,  # Important for standing stability
+                scale=50.0,  # Important for standing stability
             ),
 
             FootStabilityReward.create(
@@ -266,28 +244,28 @@ class TQCHumanoidStandingTask(TQCHumanoidTask[TQCHumanoidConfig]):
 
             # 🎯 HEIGHT STABILIZATION (NEW)
             ksim.BaseHeightRangeReward(
-                z_lower=0.75,
+                z_lower=0.4,
                 z_upper=1.00,
                 dropoff=35.0,  # Sharp penalty outside standing range
-                scale=15.0,  # Strong reward for being in standing zone
+                scale=25.0,  # Strong reward for being in standing zone
             ),
 
             ConditionalJointPositionReward.create(
                 physics_model=physics_model,
-                joint_positions=target_joint_positions,
-                min_height=0.65,  # Start applying pose reward at this height
+                min_height=0.75,  # Start applying pose reward at this height
                 max_height=1.00,  # Stop applying pose reward above this height
-                scale=100.0,  # Very strong when active
+                tolerance=0.4,
+                scale=40.0,  # Very strong when active
             ),
 
             # 🚫 DRASTIC MOVEMENT PENALTIES (INCREASED)
-            ksim.AngularVelocityPenalty(index=("x", "y", "z"), scale=-0.02),
-            ksim.LinearVelocityPenalty(index=("z"), scale=-0.05),
+            ksim.AngularVelocityPenalty(index=("x", "y", "z"), scale=-0.005),
+            ksim.LinearVelocityPenalty(index=("z"), scale=-0.01),
 
             # 🚫 LARGE ACTION PENALTIES (INCREASED)
-            ksim.ActionAccelerationPenalty(scale=-0.002),
+            ksim.ActionAccelerationPenalty(scale=-0.0005),
             #ksim.ActionJerkPenalty(scale=-0.03),
-            ksim.JointVelocityPenalty(scale=-0.001),
+            ksim.JointVelocityPenalty(scale=-0.0005),
             #ksim.JointAccelerationPenalty(scale=-0.04),
             #ksim.JointJerkPenalty(scale=-0.04),
 
@@ -300,11 +278,11 @@ class TQCHumanoidStandingTask(TQCHumanoidTask[TQCHumanoidConfig]):
                     #"KC_C_401L_L_UpForearmDrive",
                 ),
                 floor_geom_names=("floor",),
-                scale=-1,
+                scale=-0.1,
             ),
 
             # 🔋 ENERGY PENALTIES
-            ksim.CtrlPenalty(scale=-0.003),
+            ksim.CtrlPenalty(scale=-0.0001),
             ksim.LinkAccelerationPenalty(scale=-0.01),
             ksim.AvoidLimitsPenalty.create(
                 model=physics_model,
