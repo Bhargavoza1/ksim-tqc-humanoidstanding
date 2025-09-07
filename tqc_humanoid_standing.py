@@ -207,7 +207,7 @@ class TQCHumanoidStandingTask(TQCHumanoidTask[TQCHumanoidConfig]):
             # 🎯 PRIMARY OBJECTIVES (Height-aware scaling)
             MuJoCoStandupHeightReward(
                 target_height=0.95,  # Primary goal: reach standing height
-                scale=50.0,  # High priority for standing up
+                scale=75.0,  # High priority for standing up
             ),
 
             SimpleHeadUprightReward.create(
@@ -244,10 +244,10 @@ class TQCHumanoidStandingTask(TQCHumanoidTask[TQCHumanoidConfig]):
 
             # 🎯 HEIGHT STABILIZATION (NEW)
             ksim.BaseHeightRangeReward(
-                z_lower=0.4,
+                z_lower=0.3,
                 z_upper=1.00,
-                dropoff=35.0,  # Sharp penalty outside standing range
-                scale=25.0,  # Strong reward for being in standing zone
+                dropoff=30.0,  # Sharp penalty outside standing range
+                scale=30.0,  # Strong reward for being in standing zone
             ),
 
             ConditionalJointPositionReward.create(

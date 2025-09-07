@@ -37,8 +37,8 @@ def main_standing():
 
 
             # 📊 TRAINING SCALE
-            num_envs=36,
-            batch_size=2042,
+            num_envs=128,
+            batch_size=512,
             buffer_size=1_000_000,     # Sufficient for standing patterns
             min_buffer_size=2000,    # Start training earlier
 
