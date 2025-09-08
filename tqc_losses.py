@@ -324,8 +324,9 @@ def compute_tqc_temperature_loss(
     # CORRECTED: Standard SAC temperature loss
     # The stop_gradient should only be on log_probs, not on the sum
     entropy_term = jax.lax.stop_gradient(log_probs) + target_entropy
-    temp_loss = -jnp.mean(temperature.log_temp * entropy_term)
-
+    #temp_loss = -jnp.mean(temperature.log_temp * entropy_term)
+    temp_loss = jnp.mean(jnp.exp(temperature.log_temp) *
+                         (jax.lax.stop_gradient(-log_probs) - target_entropy))
     # Handle potential NaNs
     temp_loss = jnp.where(jnp.isnan(temp_loss), 0.01, temp_loss)
 

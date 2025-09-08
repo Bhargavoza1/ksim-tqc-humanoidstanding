@@ -13,7 +13,7 @@ def main_standing():
     TQCHumanoidStandingTask.launch(
         TQCHumanoidConfig(
 
-            critic_updates_per_step=1,
+            critic_updates_per_step=4,
             # 🏗️ NETWORK ARCHITECTURE
             actor_layer_sizes=[256, 256  ],
             critic_layer_sizes=[512, 512  ],
@@ -37,16 +37,16 @@ def main_standing():
 
 
             # 📊 TRAINING SCALE
-            num_envs=128,
+            num_envs=256,
             batch_size=512,
             buffer_size=1_000_000,     # Sufficient for standing patterns
-            min_buffer_size=2000,    # Start training earlier
+            min_buffer_size=20_000,    # Start training earlier
 
             # 🔄 TRAINING FREQUENCY
             train_freq=1,
-            gradient_steps=2,        # Moderate gradient steps
+            gradient_steps=4,        # Moderate gradient steps
             discount_factor=0.99,
-            soft_update_rate=0.007,
+            soft_update_rate=0.005,
 
             # 🕒 EPISODE LENGTH
             rollout_length_seconds=3.0,  # Longer episodes for standing success

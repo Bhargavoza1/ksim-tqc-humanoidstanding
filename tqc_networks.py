@@ -144,16 +144,28 @@ class TqcActor(eqx.Module):
         self.action_low_list = [low - bias for low, bias in zip(self.joint_limits_low_list, self.action_bias_list)]
         self.action_high_list = [high - bias for high, bias in zip(self.joint_limits_high_list, self.action_bias_list)]
 
+
+
         # Initialize log_std layer with conservative values
         self.log_std_layer = eqx.tree_at(
             lambda layer: layer.weight,
             self.log_std_layer,
             jnp.zeros_like(self.log_std_layer.weight)
         )
+
+        log_std_bias = jax.random.normal(keys[-2], (self.num_outputs,)) * 0.1 - 2.5
+
         self.log_std_layer = eqx.tree_at(
-            lambda layer: layer.bias,
+            lambda layer: layer.bias,  # ✅ Change BIAS, not weights!
             self.log_std_layer,
-            jnp.full_like(self.log_std_layer.bias, -2.5)
+            log_std_bias
+        )
+
+        # Keep weight initialization small but don't offset it
+        self.log_std_layer = eqx.tree_at(
+            lambda layer: layer.weight,
+            self.log_std_layer,
+            jax.random.normal(keys[-2], self.log_std_layer.weight.shape) * 0.01
         )
 
     def forward(self, obs: chex.Array, carry: Array) -> tuple[distrax.Distribution, Array]:
@@ -180,9 +192,12 @@ class TqcActor(eqx.Module):
         log_std = jnp.dot(x, self.log_std_layer.weight.T) + self.log_std_layer.bias
 
         # Clip log_std for numerical stability
-        log_std = jnp.clip(log_std, -20.0, 2.0)
+        log_std = jnp.clip(log_std, -5.0, 2.0)
         std = jnp.exp(log_std)
-
+        #jax.debug.print("Mean: {x}", x=jnp.mean(mean))
+        #jax.debug.print("STD: {x}", x=jnp.mean(std))
+        #jax.debug.print("Max STD: {x}", x=jnp.max(std))
+        #jax.debug.print("Min STD: {x}", x=jnp.min(std))
         # Create distribution
         base_dist = distrax.Independent(
             distrax.Normal(mean, std),
@@ -233,11 +248,12 @@ class TqcActor(eqx.Module):
 
         # Compute log probability
         log_prob = dist.log_prob(raw_action)
-
+        #jax.debug.print("RAW log_prob: {x}", x=jnp.mean(log_prob))  # ✅ FIXED
         # Apply tanh correction to log probability
         tanh_correction = jnp.sum(jnp.log(1 - tanh_action ** 2 + 1e-6), axis=-1)
+        #jax.debug.print("tanh_correction: {x}", x=jnp.mean(tanh_correction))  # ✅ FIXED
         corrected_log_prob = log_prob - tanh_correction
-
+        #jax.debug.print("CORRECTED log_prob: {x}", x=jnp.mean(corrected_log_prob))  # ✅ FIXED
         # Safety checks
         final_log_prob = jnp.where(jnp.isfinite(corrected_log_prob), corrected_log_prob, -1e6)
         final_action = jnp.where(jnp.isfinite(action), action, 0.0)
