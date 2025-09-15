@@ -467,7 +467,7 @@ def main() -> None:
     parser.add_argument("checkpoint_path", type=str, help="Path to TQC checkpoint")
     parser.add_argument("output_path", type=str, help="Output path for kinfer model")
     parser.add_argument("--config-path", type=str, default=None, help="Optional config file path")
-    parser.add_argument("--actor-layers", nargs="+", type=int, default=[256, 256],
+    parser.add_argument("--actor-layers", nargs="+", type=int, default=[256, 256, 128],
                        help="Actor layer sizes (default: 256 256)")
     parser.add_argument("--critic-layers", nargs="+", type=int, default=[512, 512],
                        help="Critic layer sizes (default: 512 512)")

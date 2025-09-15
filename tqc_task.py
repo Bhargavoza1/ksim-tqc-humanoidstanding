@@ -155,7 +155,8 @@ class TQCHumanoidTask(RLTask[Config], Generic[Config], ABC):
             f"  Training: gradient_steps={gradient_steps}, critic_updates={critic_updates}, tqc_batch_size={tqc_batch}")
 
         # Training sample calculations
-        total_critic_samples = critic_updates * tqc_batch
+        #total_critic_samples = critic_updates * tqc_batch
+        total_critic_samples = tqc_batch
         total_actor_samples = tqc_batch
         samples_per_gradient_step = total_critic_samples + total_actor_samples
         total_training_samples = gradient_steps * samples_per_gradient_step

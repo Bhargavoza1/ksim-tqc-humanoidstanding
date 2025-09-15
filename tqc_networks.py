@@ -144,6 +144,14 @@ class TqcActor(eqx.Module):
         self.action_low_list = [low - bias for low, bias in zip(self.joint_limits_low_list, self.action_bias_list)]
         self.action_high_list = [high - bias for high, bias in zip(self.joint_limits_high_list, self.action_bias_list)]
 
+        zero_mean_weight = jnp.zeros_like(self.mean_layer.weight)
+        zero_mean_bias = jnp.zeros_like(self.mean_layer.bias)
+
+        self.mean_layer = eqx.tree_at(
+            lambda layer: (layer.weight, layer.bias),
+            self.mean_layer,
+            (zero_mean_weight, zero_mean_bias)
+        )
 
 
         # Initialize log_std layer with conservative values
@@ -154,6 +162,34 @@ class TqcActor(eqx.Module):
         )
 
         log_std_bias = jax.random.normal(keys[-2], (self.num_outputs,)) * 0.1 - 2.5
+
+        # Define mirror joint pairs (right, left) indices
+        mirror_pairs = [
+            (0, 5),  # right_shoulder_pitch ↔ left_shoulder_pitch
+            (1, 6),  # right_shoulder_roll ↔ left_shoulder_roll
+            (2, 7),  # right_shoulder_yaw ↔ left_shoulder_yaw
+            (3, 8),  # right_elbow ↔ left_elbow
+            (4, 9),  # right_wrist ↔ left_wrist
+            (10, 15),  # right_hip_pitch ↔ left_hip_pitch
+            (11, 16),  # right_hip_roll ↔ left_hip_roll
+            (12, 17),  # right_hip_yaw ↔ left_hip_yaw
+            (13, 18),  # right_knee ↔ left_knee
+            (14, 19)  # right_ankle ↔ left_ankle
+        ]
+
+        # For each mirror pair, make exploration std identical
+        for right_idx, left_idx in mirror_pairs:
+            # Use the absolute average to maintain exploration magnitude
+            right_std = jnp.abs(log_std_bias[right_idx])
+            left_std = jnp.abs(log_std_bias[left_idx])
+            avg_std_magnitude = (right_std + left_std) / 2
+
+            # Preserve the sign but set same magnitude
+            right_sign = jnp.sign(log_std_bias[right_idx])
+            left_sign = jnp.sign(log_std_bias[left_idx])
+
+            log_std_bias = log_std_bias.at[right_idx].set(right_sign * avg_std_magnitude)
+            log_std_bias = log_std_bias.at[left_idx].set(left_sign * avg_std_magnitude)
 
         self.log_std_layer = eqx.tree_at(
             lambda layer: layer.bias,  # ✅ Change BIAS, not weights!

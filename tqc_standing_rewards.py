@@ -16,40 +16,33 @@ from ksim.utils.mujoco import get_geom_data_idx_from_name, get_body_data_idx_fro
 @attrs.define(frozen=True, kw_only=True)
 class MuJoCoStandupHeightReward(ksim.Reward):
     """Enhanced MuJoCo Standup v5 height reward with target height and stabilization."""
-    #dt: float = attrs.field(default=0.02)
-    target_height: float = attrs.field(default=0.95)  # Target standing height
-    max_reward_height: float = attrs.field(default=0.96)  # Cap reward above this height
-    stabilization_zone: float = attrs.field(default=0.1)  # Zone around target for stabilization
+    target_height: float = attrs.field(default=0.95)
+    max_reward_height: float = attrs.field(default=0.96)
+    stabilization_zone: float = attrs.field(default=0.1)
 
     def get_reward(self, trajectory: ksim.Trajectory) -> Array:
         height = trajectory.qpos[..., 2]  # z-coordinate (base height)
 
-        # Original MuJoCo reward: height / dt (encourages getting higher)
-        base_reward = height * 10.0
-        # Add stabilization component when near target
+        # SIGNIFICANTLY INCREASED base reward
+        base_reward = height * 50.0  # Increased from 10.0 → 50.0
+
         distance_from_target = jnp.abs(height - self.target_height)
 
-        # Bonus for being close to target height
+        # Increased stabilization bonus
         stabilization_bonus = jnp.where(
             distance_from_target < self.stabilization_zone,
-            (self.stabilization_zone - distance_from_target) / self.stabilization_zone * 5.0,  # Up to 5.0 bonus
+            (self.stabilization_zone - distance_from_target) / self.stabilization_zone * 20.0,  # 5.0 → 20.0
             0.0
         )
 
-        # Reduce reward if too high (prevent excessive jumping)
         height_cap_factor = jnp.where(
             height > self.max_reward_height,
-            jnp.exp(-(height - self.max_reward_height) / 0.1),  # Exponential decay above max
+            jnp.exp(-(height - self.max_reward_height) / 0.1),
             1.0
         )
 
-        # Combine: base MuJoCo reward + stabilization bonus + height cap
+        # COMBINE with stronger weighting
         total_reward = (base_reward + stabilization_bonus) * height_cap_factor
-
-        # Debug prints
-        #jax.debug.print("Height: {}, Base reward: {}, Stabilization: {}, Cap factor: {}, Total: {}",
-        #                height[0], base_reward[0], stabilization_bonus[0],
-        #                height_cap_factor[0], total_reward[0])
 
         return total_reward
 
@@ -87,23 +80,31 @@ class SimpleUprightReward(ksim.Reward):
 @attrs.define(frozen=True, kw_only=True)
 class SimpleHeadUprightReward(ksim.Reward):
     """Simple reward for keeping head upright."""
-
     imu_body_idx: int = attrs.field()
+    height_threshold: float = attrs.field(default=0.5)
+    base_reward_multiplier: float = attrs.field(default=8.0)
+    boosted_reward_multiplier: float = attrs.field(default=16.0)  # Double!
 
     def get_reward(self, trajectory: Trajectory) -> Array:
-        """Simple upright head reward."""
-
-        # Get IMU body orientation
+        base_height = trajectory.qpos[..., 2]  # z-coordinate (base height)
         imu_quat = trajectory.xquat[..., self.imu_body_idx, :]
-
-        # Convert quaternion to get local Z-axis in global frame
-        local_z = jnp.array([0.0 , 0.0, 1.0 ])
+        local_z = jnp.array([0.0, 0.0, 1.0])
         global_z = xax.rotate_vector_by_quat(local_z, imu_quat)
 
-        # Reward when head Z-axis points up (1.0 = perfectly upright, 0.0 = sideways)
+        # INCREASED REWARD RANGE: 0-5 instead of 0-1
         uprightness = jnp.maximum(0.0, global_z[..., 2])
-        total = uprightness ** 2
-        # Square it for sharper reward
+        # Apply squared curve for sharper reward
+        base_reward = uprightness ** 2
+
+        # Double the reward if above height threshold
+        reward_multiplier = jnp.where(
+            base_height >= self.height_threshold,
+            self.boosted_reward_multiplier,  # Double reward
+            self.base_reward_multiplier  # Normal reward
+        )
+
+        total = base_reward * reward_multiplier
+
         return total
 
     @classmethod
@@ -132,27 +133,25 @@ class FootContactReward(ksim.Reward):
     contact_threshold: float = attrs.field(default=0.05)
 
     def get_reward(self, trajectory: Trajectory) -> Array:
-        """Reward for both feet maintaining ground contact."""
         foot_rewards = []
 
-        for i, foot_idx in enumerate(self.foot_body_indices):
+        for foot_idx in self.foot_body_indices:
             foot_pos = trajectory.xpos[..., foot_idx, :]
             foot_z = foot_pos[..., 2]
             foot_height = foot_z - self.floor_z
 
-            # Strong reward for foot being on or very close to ground
-            contact_reward = jnp.exp(-jnp.maximum(foot_height, 0.0) / self.contact_threshold)
+            # STRONGER contact reward with better curve
+            contact_reward = jnp.where(
+                foot_height < 0.02,  # Very close to ground
+                2.0,  # Maximum reward for solid contact
+                jnp.exp(-jnp.maximum(foot_height, 0.0) / (self.contact_threshold * 0.5))  # Sharper falloff
+            )
             foot_rewards.append(contact_reward)
 
-        # For both feet on ground, multiply rewards instead of averaging
-        # This ensures maximum reward only when BOTH feet are in contact
         foot_rewards_stacked = jnp.stack(foot_rewards, axis=-1)
 
-        # Option 1: Multiply rewards (both feet must be down)
-        both_feet_contact = jnp.prod(foot_rewards_stacked, axis=-1)
-
-        # Option 2: Minimum of the two (weakest link approach)
-        # both_feet_contact = jnp.min(foot_rewards_stacked, axis=-1)
+        # INCREASED REWARD: 0-4 range for both feet
+        both_feet_contact = jnp.prod(foot_rewards_stacked, axis=-1) * 2.0  # Added multiplier
 
         return both_feet_contact
 
@@ -274,25 +273,22 @@ class ContactPenalty(ksim.Reward):
 @attrs.define(frozen=True, kw_only=True)
 class FootStabilityReward(ksim.Reward):
     """Reward for stable foot placement and minimal foot movement."""
-
     foot_body_indices: tuple[int, ...] = attrs.field()
     velocity_threshold: float = attrs.field(default=0.1)
     position_stability_weight: float = attrs.field(default=0.5)
 
     def get_reward(self, trajectory: Trajectory) -> Array:
-        """Reward stable base position and low angular velocity."""
-        # Use base linear velocity for stability
-        base_linvel = trajectory.qvel[..., :3]  # Linear velocity
+        base_linvel = trajectory.qvel[..., :3]
         linvel_norm = jnp.linalg.norm(base_linvel, axis=-1)
-        velocity_reward = jnp.exp(-linvel_norm / self.velocity_threshold)
+        velocity_reward = jnp.exp(-linvel_norm / (self.velocity_threshold * 0.5))  # Tighter threshold
 
-        # Use base angular velocity for rotational stability
-        base_angvel = trajectory.qvel[..., 3:6]  # Angular velocity
+        base_angvel = trajectory.qvel[..., 3:6]
         angvel_norm = jnp.linalg.norm(base_angvel, axis=-1)
-        angular_stability = jnp.exp(-angvel_norm / 0.1)
+        angular_stability = jnp.exp(-angvel_norm / 0.05)  # Tighter threshold
 
-        # Combine both stability measures
-        total_reward = velocity_reward * angular_stability
+        # INCREASED REWARD: 0-2 range instead of 0-1
+        total_reward = (velocity_reward * angular_stability) * 2.0
+
         return total_reward
 
     @classmethod
@@ -322,38 +318,30 @@ class FootStabilityReward(ksim.Reward):
 @attrs.define(frozen=True, kw_only=True)
 class MirrorSymmetryReward(ksim.Reward):
     """Reward for perfect mirror symmetry - left +ve = right -ve."""
-
     tolerance: float = attrs.field(default=0.2)
 
     def get_reward(self, trajectory: Trajectory) -> Array:
-        """Reward when left and right joints are exact opposites."""
-        joint_pos = trajectory.qpos[..., 7:]  # Skip base position/orientation (first 7)
+        joint_pos = trajectory.qpos[..., 7:]
 
-        # For perfect mirror symmetry: left_joint + right_joint should = 0
-        # Joint pairs: (right_idx, left_idx)
         symmetry_rewards = []
+        # Arms
+        symmetry_rewards.append(jnp.exp(-jnp.abs(joint_pos[..., 0] + joint_pos[..., 5]) / self.tolerance))
+        symmetry_rewards.append(jnp.exp(-jnp.abs(joint_pos[..., 1] + joint_pos[..., 6]) / self.tolerance))
+        symmetry_rewards.append(jnp.exp(-jnp.abs(joint_pos[..., 2] + joint_pos[..., 7]) / self.tolerance))
+        symmetry_rewards.append(jnp.exp(-jnp.abs(joint_pos[..., 3] + joint_pos[..., 8]) / self.tolerance))
+        symmetry_rewards.append(jnp.exp(-jnp.abs(joint_pos[..., 4] + joint_pos[..., 9]) / self.tolerance))
+        # Legs
+        symmetry_rewards.append(jnp.exp(-jnp.abs(joint_pos[..., 10] + joint_pos[..., 15]) / self.tolerance))
+        symmetry_rewards.append(jnp.exp(-jnp.abs(joint_pos[..., 11] + joint_pos[..., 16]) / self.tolerance))
+        symmetry_rewards.append(jnp.exp(-jnp.abs(joint_pos[..., 12] + joint_pos[..., 17]) / self.tolerance))
+        symmetry_rewards.append(jnp.exp(-jnp.abs(joint_pos[..., 13] + joint_pos[..., 18]) / self.tolerance))
+        symmetry_rewards.append(jnp.exp(-jnp.abs(joint_pos[..., 14] + joint_pos[..., 19]) / self.tolerance))
 
-        # Arms - all should mirror
-        symmetry_rewards.append(
-            jnp.exp(-jnp.abs(joint_pos[..., 0] + joint_pos[..., 5]) / self.tolerance))  # shoulder_pitch
-        symmetry_rewards.append(
-            jnp.exp(-jnp.abs(joint_pos[..., 1] + joint_pos[..., 6]) / self.tolerance))  # shoulder_roll
-        symmetry_rewards.append(
-            jnp.exp(-jnp.abs(joint_pos[..., 2] + joint_pos[..., 7]) / self.tolerance))  # shoulder_yaw
-        symmetry_rewards.append(jnp.exp(-jnp.abs(joint_pos[..., 3] + joint_pos[..., 8]) / self.tolerance))  # elbow
-        symmetry_rewards.append(jnp.exp(-jnp.abs(joint_pos[..., 4] + joint_pos[..., 9]) / self.tolerance))  # wrist
+        stacked_rewards = jnp.stack(symmetry_rewards, axis=-1)
 
-        # Legs - all should mirror
-        symmetry_rewards.append(
-            jnp.exp(-jnp.abs(joint_pos[..., 10] + joint_pos[..., 15]) / self.tolerance))  # hip_pitch
-        symmetry_rewards.append(jnp.exp(-jnp.abs(joint_pos[..., 11] + joint_pos[..., 16]) / self.tolerance))  # hip_roll
-        symmetry_rewards.append(jnp.exp(-jnp.abs(joint_pos[..., 12] + joint_pos[..., 17]) / self.tolerance))  # hip_yaw
-        symmetry_rewards.append(jnp.exp(-jnp.abs(joint_pos[..., 13] + joint_pos[..., 18]) / self.tolerance))  # knee
-        symmetry_rewards.append(jnp.exp(-jnp.abs(joint_pos[..., 14] + joint_pos[..., 19]) / self.tolerance))  # ankle
+        # SIGNIFICANTLY INCREASED REWARD: 0-15 range instead of 0-10
+        total = jnp.mean(stacked_rewards, axis=-1) * 15.0  # Changed from squared mean × 10
 
-        # Return average symmetry across all joint pairs
-        stacked_rewards = jnp.stack(symmetry_rewards, axis=-1)  # Shape: (batch_size, 10)
-        total =  (jnp.mean(stacked_rewards, axis=-1) ** 2) * 10 # Shape: (batch_size,) - preserves batch dimension
         return total
 
     @classmethod
@@ -371,78 +359,100 @@ class MirrorSymmetryReward(ksim.Reward):
         )
 
 
+@attrs.define(frozen=True, kw_only=True)
+class MirrorSymmetryPenalty(ksim.Reward):
+    """STRONG penalty for asymmetry - left +ve should = right -ve."""
+    tolerance: float = attrs.field(default=0.2)
+    penalty_strength: float = attrs.field(default=10.0)  # How strong the penalty is
 
+    def get_reward(self, trajectory: Trajectory) -> Array:
+        joint_pos = trajectory.qpos[..., 7:]
+
+        asymmetry_penalties = []
+        # Arms - perfect mirror: left + right = 0
+        asymmetry_penalties.append(jnp.exp(-jnp.abs(joint_pos[..., 0] + joint_pos[..., 5]) / self.tolerance))
+        asymmetry_penalties.append(jnp.exp(-jnp.abs(joint_pos[..., 1] + joint_pos[..., 6]) / self.tolerance))
+        asymmetry_penalties.append(jnp.exp(-jnp.abs(joint_pos[..., 2] + joint_pos[..., 7]) / self.tolerance))
+        asymmetry_penalties.append(jnp.exp(-jnp.abs(joint_pos[..., 3] + joint_pos[..., 8]) / self.tolerance))
+        asymmetry_penalties.append(jnp.exp(-jnp.abs(joint_pos[..., 4] + joint_pos[..., 9]) / self.tolerance))
+        # Legs - perfect mirror: left + right = 0
+        asymmetry_penalties.append(jnp.exp(-jnp.abs(joint_pos[..., 10] + joint_pos[..., 15]) / self.tolerance))
+        asymmetry_penalties.append(jnp.exp(-jnp.abs(joint_pos[..., 11] + joint_pos[..., 16]) / self.tolerance))
+        asymmetry_penalties.append(jnp.exp(-jnp.abs(joint_pos[..., 12] + joint_pos[..., 17]) / self.tolerance))
+        asymmetry_penalties.append(jnp.exp(-jnp.abs(joint_pos[..., 13] + joint_pos[..., 18]) / self.tolerance))
+        asymmetry_penalties.append(jnp.exp(-jnp.abs(joint_pos[..., 14] + joint_pos[..., 19]) / self.tolerance))
+
+        stacked_penalties = jnp.stack(asymmetry_penalties, axis=-1)
+
+        # Convert to asymmetry penalty:
+        # Perfect symmetry: exp(0) = 1 → penalty = 0
+        # Total asymmetry: exp(-large) ~ 0 → penalty = strong
+        mean_symmetry = jnp.mean(stacked_penalties, axis=-1)
+        asymmetry_penalty = (1.0 - mean_symmetry) * self.penalty_strength
+
+        # Return NEGATIVE reward (penalty)
+        return asymmetry_penalty
+
+    @classmethod
+    def create(
+            cls,
+            physics_model: PhysicsModel,
+            scale: float = -8.0,  # 🚨 NEGATIVE scale for penalty!
+            tolerance: float = 0.3,
+            penalty_strength: float = 15.0,  # Strong penalty
+            scale_by_curriculum: bool = False,
+    ) -> "MirrorSymmetryPenalty":
+        return cls(
+            tolerance=tolerance,
+            penalty_strength=penalty_strength,
+            scale=scale,  # Negative scale!
+            scale_by_curriculum=scale_by_curriculum,
+        )
 
 @attrs.define(frozen=True, kw_only=True)
 class ConditionalJointPositionReward(ksim.Reward):
     """Joint position reward that only activates when robot is standing at correct height."""
     min_height: float = attrs.field(default=0.85)
     max_height: float = attrs.field(default=1.05)
-    tolerance: float = attrs.field(default=0.3)  # Similar to symmetry reward
+    tolerance: float = attrs.field(default=0.3)
 
     def get_reward(self, trajectory: Trajectory) -> Array:
-        """Joint position reward that ramps up when robot reaches standing height."""
-
-        # Get current base height
         base_height = trajectory.qpos[..., 2]
 
-        # Height-based activation (simplified)
-        height_factor = jnp.where(
-            (base_height >= self.min_height) & (base_height <= self.max_height),
-            1.0,
-            0.0
+        # Smooth activation instead of binary
+        height_factor = jnp.clip(
+            (base_height - self.min_height) / (self.max_height - self.min_height),
+            0.0, 1.0
         )
 
-        # Get joint positions (same as symmetry reward)
-        joint_pos = trajectory.qpos[..., 7:]  # Skip base position/orientation (first 7)
+        # Quadratic activation for smoother transition
+        height_factor = height_factor ** 2
 
-        # Target joint positions (hardcoded indices like symmetry reward)
-        # Based on your target_joint_positions dict, in order:
+        joint_pos = trajectory.qpos[..., 7:]
+
         target_positions = jnp.array([
-            0.0,                    # right_shoulder_pitch
-            math.radians(-10.0),    # right_shoulder_roll
-            0.0,                    # right_shoulder_yaw
-            math.radians(90.0),     # right_elbow
-            0.0,                    # right_wrist
-            0.0,                    # left_shoulder_pitch
-            math.radians(10.0),     # left_shoulder_roll
-            0.0,                    # left_shoulder_yaw
-            math.radians(-90.0),    # left_elbow
-            0.0,                    # left_wrist
-            math.radians(-20.0),    # right_hip_pitch
-            math.radians(0.0),      # right_hip_roll
-            0.0,                    # right_hip_yaw
-            math.radians(-50.0),    # right_knee
-            math.radians(30.0),     # right_ankle
-            math.radians(20.0),     # left_hip_pitch
-            math.radians(0.0),      # left_hip_roll
-            0.0,                    # left_hip_yaw
-            math.radians(50.0),     # left_knee
-            math.radians(-30.0),    # left_ankle
+            0.0, math.radians(-10.0), 0.0, math.radians(90.0), 0.0,  # right arm
+            0.0, math.radians(10.0), 0.0, math.radians(-90.0), 0.0,  # left arm
+            math.radians(-20.0), math.radians(0.0), 0.0, math.radians(-50.0), math.radians(30.0),  # right leg
+            math.radians(20.0), math.radians(0.0), 0.0, math.radians(50.0), math.radians(-30.0)  # left leg
         ])
 
-        # Calculate joint position rewards (same pattern as symmetry)
         joint_rewards = []
         for i in range(len(target_positions)):
             joint_error = jnp.abs(joint_pos[..., i] - target_positions[i])
-            joint_reward = jnp.exp(-joint_error / self.tolerance)
+            # SHARPER reward curve
+            joint_reward = jnp.exp(-joint_error / (self.tolerance * 0.7))
             joint_rewards.append(joint_reward)
 
-        # Stack and average (same as symmetry reward)
         stacked_rewards = jnp.stack(joint_rewards, axis=-1)
-        joint_reward_total = jnp.mean(stacked_rewards, axis=-1)
 
-        # Apply height-based activation
-        final_reward = joint_reward_total * height_factor * 10.0
+        # MUCH STRONGER REWARD: 0-20 range when perfect
+        joint_reward_total = jnp.mean(stacked_rewards, axis=-1) * 20.0
 
-        # Debug output
-        #jax.debug.print("Base height: {:.3f}", base_height[0])
-        #jax.debug.print("Height factor: {:.3f}", height_factor[0])
-        #jax.debug.print("Joint reward total: {:.6f}", joint_reward_total[0])
-        #jax.debug.print("Final conditional reward: {:.3f}", final_reward[0])
+        # Apply smooth height-based activation
+        final_reward = joint_reward_total * height_factor
 
         return final_reward
-
     @classmethod
     def create(
             cls,

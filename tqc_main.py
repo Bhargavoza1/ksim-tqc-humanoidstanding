@@ -13,15 +13,16 @@ def main_standing():
     TQCHumanoidStandingTask.launch(
         TQCHumanoidConfig(
 
-            critic_updates_per_step=4,
+            critic_updates_per_step=5,
             # 🏗️ NETWORK ARCHITECTURE
-            actor_layer_sizes=[256, 256  ],
-            critic_layer_sizes=[512, 512  ],
+            #actor_layer_sizes=[256, 256],
+            actor_layer_sizes=[256, 256, 128],
+            critic_layer_sizes=[512, 512],
 
             # 🎯 TQC PARAMETERS
             num_critics=5,
             num_quantiles=25,
-            top_quantiles_to_drop=2,
+            top_quantiles_to_drop=25,
 
 
             learning_rate_actor=1e-4,
@@ -33,18 +34,18 @@ def main_standing():
             #target_entropy="auto",  # -action_dim
             target_entropy="auto",  # -action_dim
             ent_coef="auto",        # Learnable temperature
-            initial_temperature=0.2,  # Lower initial temperature for more focused exploration
+            initial_temperature=0.07,  # Lower initial temperature for more focused exploration
 
 
             # 📊 TRAINING SCALE
             num_envs=256,
-            batch_size=512,
-            buffer_size=1_000_000,     # Sufficient for standing patterns
+            batch_size=256,
+            buffer_size=700_000,     # Sufficient for standing patterns
             min_buffer_size=20_000,    # Start training earlier
 
             # 🔄 TRAINING FREQUENCY
             train_freq=1,
-            gradient_steps=4,        # Moderate gradient steps
+            gradient_steps=8,        # Moderate gradient steps
             discount_factor=0.99,
             soft_update_rate=0.005,
 
@@ -59,7 +60,8 @@ def main_standing():
             ctrl_dt=0.02,
             iterations=8,
             ls_iterations=8,
-            action_latency_range=(0.003, 0.02),
+            #action_latency_range=(0.003, 0.02),
+            action_latency_range=(0.002, 0.1),
             drop_action_prob=0.05,
 
 
