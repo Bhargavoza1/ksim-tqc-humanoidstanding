@@ -208,21 +208,21 @@ class TQCHumanoidStandingTask(TQCHumanoidTask[TQCHumanoidConfig]):
             MuJoCoStandupHeightReward(
                 target_height=0.95,
                 #scale=14.0,  # Reasonable scale
-                scale=25.0,  # Reasonable scale
+                scale=35.0,  # Reasonable scale
             ),
 
             SimpleHeadUprightReward.create(
                 physics_model=physics_model,
                 imu_body_name="Torso_Side_Right",
-                scale=7.0,  # Good scale for head upright
+                scale=15.0,  # Good scale for head upright
             ),
 
             # 🤖 POSE REFINEMENT
-            MirrorSymmetryReward.create(
-                physics_model=physics_model,
-                scale=13,  # Balanced scale
-                tolerance=0.1,
-            ),
+            #MirrorSymmetryReward.create(
+            #    physics_model=physics_model,
+            #    scale=13,  # Balanced scale
+            #    tolerance=0.1,
+            #),
 
             #MirrorSymmetryPenalty.create(
             #    physics_model=physics_model,
