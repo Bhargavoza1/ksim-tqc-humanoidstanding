@@ -208,13 +208,13 @@ class TQCHumanoidStandingTask(TQCHumanoidTask[TQCHumanoidConfig]):
             MuJoCoStandupHeightReward(
                 target_height=0.95,
                 #scale=14.0,  # Reasonable scale
-                scale=35.0,  # Reasonable scale
+                scale=40.0,  # Reasonable scale
             ),
 
             SimpleHeadUprightReward.create(
                 physics_model=physics_model,
                 imu_body_name="Torso_Side_Right",
-                scale=15.0,  # Good scale for head upright
+                scale=25.0,  # Good scale for head upright
             ),
 
             # 🤖 POSE REFINEMENT

@@ -10,17 +10,28 @@ import jax.numpy as jnp
 from jaxtyping import Array, PRNGKeyArray, PyTree
 import math
 
+"""TQC Actor with joint-specific scaling and reduced action variance."""
+
+import math
+from typing import List, Tuple
+
+import chex
+import distrax
+import equinox as eqx
+import jax
+import jax.numpy as jnp
+from jaxtyping import Array, PRNGKeyArray
+
 
 class TqcActor(eqx.Module):
-    """TQC Actor with proper bias handling and action scaling."""
+    """TQC Actor with joint-specific scaling based on actuator metadata."""
 
     layers: tuple[eqx.nn.Linear, ...]
     layer_norms: tuple[eqx.nn.LayerNorm, ...]
     mean_layer: eqx.nn.Linear
     log_std_layer: eqx.nn.Linear
 
-    # Trainable parameters
-    action_scale: Array  # Trainable scaling
+
 
     # Static configuration (Python primitives and lists only)
     action_bias_list: List[float] = eqx.static_field()
@@ -32,7 +43,6 @@ class TqcActor(eqx.Module):
     num_outputs: int = eqx.static_field()
     layer_sizes: List[int] = eqx.static_field()
     use_layer_norm: bool = eqx.static_field()
-    max_scale: float = eqx.static_field()
 
     def __init__(
             self,
@@ -42,7 +52,6 @@ class TqcActor(eqx.Module):
             layer_sizes: List[int] = None,
             hidden_size: int = 256,
             depth: int = 4,
-            max_scale: float = 3.14,
             use_layer_norm: bool = False,
     ):
         # Use custom layer sizes if provided, otherwise fall back to default
@@ -53,7 +62,7 @@ class TqcActor(eqx.Module):
             self.layer_sizes = [hidden_size] * (depth - 1)
             total_layers = depth
 
-        keys = jax.random.split(key, total_layers + 3)  # +3 for mean/log_std heads + scaling
+        keys = jax.random.split(key, total_layers + 2)  # +2 for mean/log_std heads
 
         # Build neural network layers
         layers = []
@@ -89,19 +98,14 @@ class TqcActor(eqx.Module):
         self.use_layer_norm = use_layer_norm
 
         # Output heads for mean and log_std
-        self.mean_layer = eqx.nn.Linear(final_hidden_size, num_outputs, key=keys[-3])
-        self.log_std_layer = eqx.nn.Linear(final_hidden_size, num_outputs, key=keys[-2])
-
-        # Initialize trainable scaling parameters
-        scale_key = keys[-1]
-        self.action_scale = jax.random.normal(scale_key, (num_outputs,)) * 0.2 + 1.5
+        self.mean_layer = eqx.nn.Linear(final_hidden_size, num_outputs, key=keys[-2])
+        self.log_std_layer = eqx.nn.Linear(final_hidden_size, num_outputs, key=keys[-1])
 
         # Set static fields
         self.num_inputs = num_inputs
         self.num_outputs = num_outputs
-        self.max_scale = max_scale
 
-        # Define joint limits as Python lists (static-safe)
+        # Define joint limits from metadata (in radians)
         self.joint_limits_low_list = [
             math.radians(-180), math.radians(-95), math.radians(-95), math.radians(0), math.radians(-100),
             math.radians(-80), math.radians(-20), math.radians(-95), math.radians(-142), math.radians(-100),
@@ -116,54 +120,54 @@ class TqcActor(eqx.Module):
             math.radians(127), math.radians(130), math.radians(90), math.radians(155), math.radians(13)
         ]
 
-        # Define desired standing pose bias as Python list
+        # Define standing pose bias (target pose)
         self.action_bias_list = [
-            0.0,  # dof_right_shoulder_pitch_03
-            math.radians(-10.0),  # dof_right_shoulder_roll_03
-            0.0,  # dof_right_shoulder_yaw_02
-            math.radians(90.0),  # dof_right_elbow_02
-            0.0,  # dof_right_wrist_00
-            0.0,  # dof_left_shoulder_pitch_03
-            math.radians(10.0),  # dof_left_shoulder_roll_03
-            0.0,  # dof_left_shoulder_yaw_02
-            math.radians(-90.0),  # dof_left_elbow_02
-            0.0,  # dof_left_wrist_00
-            math.radians(-20.0),  # dof_right_hip_pitch_04
-            math.radians(0.0),  # dof_right_hip_roll_03
-            0.0,  # dof_right_hip_yaw_03
-            math.radians(-50.0),  # dof_right_knee_04
-            math.radians(30.0),  # dof_right_ankle_02
-            math.radians(20.0),  # dof_left_hip_pitch_04
-            math.radians(0.0),  # dof_left_hip_roll_03
-            0.0,  # dof_left_hip_yaw_03
-            math.radians(50.0),  # dof_left_knee_04
-            math.radians(-30.0),  # dof_left_ankle_02
+            0.0,  # right_shoulder_pitch - neutral
+            math.radians(-10.0),  # right_shoulder_roll - slight outward
+            0.0,  # right_shoulder_yaw - neutral
+            math.radians(90.0),  # right_elbow - bent for balance
+            0.0,  # right_wrist - neutral
+            0.0,  # left_shoulder_pitch - neutral
+            math.radians(10.0),  # left_shoulder_roll - slight outward (mirrored)
+            0.0,  # left_shoulder_yaw - neutral
+            math.radians(-90.0),  # left_elbow - bent for balance (mirrored)
+            0.0,  # left_wrist - neutral
+            math.radians(-20.0),  # right_hip_pitch - slight forward lean
+            math.radians(0.0),  # right_hip_roll - neutral
+            0.0,  # right_hip_yaw - neutral
+            math.radians(-50.0),  # right_knee - bent for standing
+            math.radians(30.0),  # right_ankle - forward tilt
+            math.radians(20.0),  # left_hip_pitch - slight forward lean (mirrored)
+            math.radians(0.0),  # left_hip_roll - neutral
+            0.0,  # left_hip_yaw - neutral
+            math.radians(50.0),  # left_knee - bent for standing (mirrored)
+            math.radians(-30.0),  # left_ankle - forward tilt (mirrored)
         ]
 
-        # Calculate action limits as Python lists
+        # Calculate action limits relative to bias
         self.action_low_list = [low - bias for low, bias in zip(self.joint_limits_low_list, self.action_bias_list)]
         self.action_high_list = [high - bias for high, bias in zip(self.joint_limits_high_list, self.action_bias_list)]
 
+        # Initialize mean layer to output near zero (small corrections around bias)
         zero_mean_weight = jnp.zeros_like(self.mean_layer.weight)
         zero_mean_bias = jnp.zeros_like(self.mean_layer.bias)
-
         self.mean_layer = eqx.tree_at(
             lambda layer: (layer.weight, layer.bias),
             self.mean_layer,
             (zero_mean_weight, zero_mean_bias)
         )
 
-
-        # Initialize log_std layer with conservative values
+        # Initialize log_std layer with much more conservative values
         self.log_std_layer = eqx.tree_at(
             lambda layer: layer.weight,
             self.log_std_layer,
             jnp.zeros_like(self.log_std_layer.weight)
         )
 
-        log_std_bias = jax.random.normal(keys[-2], (self.num_outputs,)) * 0.1 - 2.5
+        # MUCH more conservative log_std initialization
+        log_std_bias = jax.random.normal(keys[-1], (self.num_outputs,)) * 0.02 - 3.0  # Very low exploration
 
-        # Define mirror joint pairs (right, left) indices
+        # Define mirror joint pairs for symmetric exploration
         mirror_pairs = [
             (0, 5),  # right_shoulder_pitch ↔ left_shoulder_pitch
             (1, 6),  # right_shoulder_roll ↔ left_shoulder_roll
@@ -177,14 +181,12 @@ class TqcActor(eqx.Module):
             (14, 19)  # right_ankle ↔ left_ankle
         ]
 
-        # For each mirror pair, make exploration std identical
+        # Make mirror joints have identical exploration levels
         for right_idx, left_idx in mirror_pairs:
-            # Use the absolute average to maintain exploration magnitude
             right_std = jnp.abs(log_std_bias[right_idx])
             left_std = jnp.abs(log_std_bias[left_idx])
             avg_std_magnitude = (right_std + left_std) / 2
 
-            # Preserve the sign but set same magnitude
             right_sign = jnp.sign(log_std_bias[right_idx])
             left_sign = jnp.sign(log_std_bias[left_idx])
 
@@ -192,16 +194,9 @@ class TqcActor(eqx.Module):
             log_std_bias = log_std_bias.at[left_idx].set(left_sign * avg_std_magnitude)
 
         self.log_std_layer = eqx.tree_at(
-            lambda layer: layer.bias,  # ✅ Change BIAS, not weights!
+            lambda layer: layer.bias,
             self.log_std_layer,
             log_std_bias
-        )
-
-        # Keep weight initialization small but don't offset it
-        self.log_std_layer = eqx.tree_at(
-            lambda layer: layer.weight,
-            self.log_std_layer,
-            jax.random.normal(keys[-2], self.log_std_layer.weight.shape) * 0.01
         )
 
     def forward(self, obs: chex.Array, carry: Array) -> tuple[distrax.Distribution, Array]:
@@ -227,13 +222,10 @@ class TqcActor(eqx.Module):
         mean = jnp.dot(x, self.mean_layer.weight.T) + self.mean_layer.bias
         log_std = jnp.dot(x, self.log_std_layer.weight.T) + self.log_std_layer.bias
 
-        # Clip log_std for numerical stability
-        log_std = jnp.clip(log_std, -5.0, 2.0)
+        # MUCH tighter log_std clipping for stable standing
+        log_std = jnp.clip(log_std, -8.0, 1.0)
         std = jnp.exp(log_std)
-        #jax.debug.print("Mean: {x}", x=jnp.mean(mean))
-        #jax.debug.print("STD: {x}", x=jnp.mean(std))
-        #jax.debug.print("Max STD: {x}", x=jnp.max(std))
-        #jax.debug.print("Min STD: {x}", x=jnp.min(std))
+
         # Create distribution
         base_dist = distrax.Independent(
             distrax.Normal(mean, std),
@@ -249,8 +241,8 @@ class TqcActor(eqx.Module):
             key: chex.PRNGKey,
             deterministic: bool = False
     ) -> tuple[chex.Array, chex.Array]:
-        """Sample action and compute log probability with proper bias handling."""
-        # Convert static lists to JAX arrays for computation
+        """Sample action with joint-specific scaling and proper bias handling."""
+        # Convert static lists to JAX arrays
         action_bias = jnp.array(self.action_bias_list)
         joint_limits_low = jnp.array(self.joint_limits_low_list)
         joint_limits_high = jnp.array(self.joint_limits_high_list)
@@ -269,27 +261,31 @@ class TqcActor(eqx.Module):
         # Apply tanh to squash to [-1, 1]
         tanh_action = jnp.tanh(raw_action)
 
-        # Compute action ranges (accounting for bias adjustment)
-        negative_range = jnp.maximum(jnp.abs(action_low), 0.001)  # Avoid zero
-        positive_range = jnp.maximum(action_high, 0.001)  # Avoid zero
+        # Compute base action ranges (accounting for bias adjustment)
+        negative_range = jnp.maximum(jnp.abs(action_low), 0.001)
+        positive_range = jnp.maximum(action_high, 0.001)
 
-        # Scale based on sign of tanh output
+        # Choose range based on action sign
         action_range = jnp.where(tanh_action < 0, negative_range, positive_range)
 
-        # Apply scaling and bias
+        # Scale actions and add bias
         scaled_action = tanh_action * action_range + action_bias
 
-        # Final action (with safety clipping to joint limits)
-        action = jnp.clip(scaled_action, joint_limits_low, joint_limits_high)
+        # Final safety clipping to joint limits
+        #action = jnp.clip(scaled_action, joint_limits_low, joint_limits_high)
 
-        # Compute log probability
+        safety_buffer = 0.001  # Small safety margin (about 0.06 degrees)
+        action = jnp.clip(
+            scaled_action,
+            joint_limits_low + safety_buffer,
+            joint_limits_high - safety_buffer
+        )
+
+        # Compute log probability with tanh correction
         log_prob = dist.log_prob(raw_action)
-        #jax.debug.print("RAW log_prob: {x}", x=jnp.mean(log_prob))  # ✅ FIXED
-        # Apply tanh correction to log probability
         tanh_correction = jnp.sum(jnp.log(1 - tanh_action ** 2 + 1e-6), axis=-1)
-        #jax.debug.print("tanh_correction: {x}", x=jnp.mean(tanh_correction))  # ✅ FIXED
         corrected_log_prob = log_prob - tanh_correction
-        #jax.debug.print("CORRECTED log_prob: {x}", x=jnp.mean(corrected_log_prob))  # ✅ FIXED
+
         # Safety checks
         final_log_prob = jnp.where(jnp.isfinite(corrected_log_prob), corrected_log_prob, -1e6)
         final_action = jnp.where(jnp.isfinite(action), action, 0.0)

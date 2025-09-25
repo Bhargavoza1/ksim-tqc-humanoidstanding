@@ -244,8 +244,8 @@ class TQCHumanoidTask(RLTask[Config], Generic[Config], ABC):
             if self.config.use_auto_entropy():
                 optimizers.append(
                     optax.chain(
-                        #optax.clip_by_global_norm(1),  # Very aggressive!
-                        optax.adam(temp_lr)  # 10x lower just for temperature
+                        optax.clip_by_global_norm(0.01),  # Add aggressive clipping back
+                        optax.adam(temp_lr)
                     )
                 )
 

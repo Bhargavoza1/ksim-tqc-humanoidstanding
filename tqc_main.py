@@ -27,14 +27,14 @@ def main_standing():
 
             learning_rate_actor=1e-4,
             learning_rate_critic=3e-4,
-            learning_rate_temp=7e-5,
+            learning_rate_temp=8e-5,
             #use_circular_gradients=False,  # Use stable detached gradients
             #learning_rate_temp_circular=3e-4,
             # 🌡️ ENTROPY SETTINGS
             #target_entropy="auto",  # -action_dim
             target_entropy="auto",  # -action_dim
             ent_coef="auto",        # Learnable temperature
-            initial_temperature=0.07,  # Lower initial temperature for more focused exploration
+            initial_temperature=0.06,  # Lower initial temperature for more focused exploration
 
 
             # 📊 TRAINING SCALE
@@ -61,12 +61,12 @@ def main_standing():
             iterations=8,
             ls_iterations=8,
             #action_latency_range=(0.003, 0.02),
-            action_latency_range=(0.002, 0.1),
+            action_latency_range=(0.005, 0.025),
             drop_action_prob=0.05,
 
 
             # 🔧 STABILITY SETTINGS
-            gradient_clip_norm=0.5,
+            gradient_clip_norm=1.1,
             enable_gradient_clipping=True,
             enable_nan_detection=True,
 

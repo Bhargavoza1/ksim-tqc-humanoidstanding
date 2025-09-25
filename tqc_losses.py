@@ -68,7 +68,7 @@ def compute_tqc_critic_loss(
     def safe_forward(critic, obs, actions, carry):
         quantiles, carry_out = critic.forward(obs, actions, carry)
         # Clip quantile values to reasonable range
-        quantiles = jnp.clip(quantiles, -1000.0, 1000.0)
+        quantiles = jnp.clip(quantiles, -3000.0, 3000.0)
         # Replace NaN with zeros
         quantiles = jnp.where(jnp.isnan(quantiles), 0.0, quantiles)
         return quantiles, carry_out
@@ -216,7 +216,7 @@ def compute_tqc_actor_loss(
     def safe_critic_forward(critic, obs, acts, carry):
         """Safe forward pass through critic with NaN handling."""
         quantiles, carry_out = critic.forward(obs, acts, carry)
-        quantiles = jnp.clip(quantiles, -1000.0, 1000.0)
+        quantiles = jnp.clip(quantiles, -3000.0, 3000.0)
         quantiles = jnp.where(jnp.isnan(quantiles), 0.0, quantiles)
         return quantiles, carry_out
 
