@@ -22,7 +22,8 @@ from tqc_standing_rewards import (
 
     MuJoCoStandupHeightReward, MuJoCoUprightReward, SimpleUprightReward, FootContactReward, ContactPenalty,
     FootStabilityReward, MirrorSymmetryReward, SimpleHeadUprightReward, ConditionalJointPositionReward,
-    MirrorSymmetryPenalty)
+    MirrorSymmetryPenalty, WeightShiftTrackingReward, StandingDurationReward, CenterOfMassBalanceReward,
+    CoMVelocityPenalty, CenterOfMassPositionReward)
 
 # Keep some useful existing rewards
 from pathlib import Path
@@ -61,11 +62,41 @@ class TQCHumanoidStandingTask(TQCHumanoidTask[TQCHumanoidConfig]):
         return tqc_variables, model_carry
 
     def get_mujoco_model(self) -> mujoco.MjModel:
-        """Get MuJoCo model."""
-        #mjcf_path = asyncio.run(ksim.get_mujoco_model_path("kbot", name="robot"))
+        """Get MuJoCo model with modified gravity."""
         mjcf_path = "./kbot/robot/robot.mjcf"
-        print(f"Directory: {Path(mjcf_path).parent}")  # Add this line
-        return mujoco_scenes.mjcf.load_mjmodel(mjcf_path, scene="smooth")
+        print(f"Directory: {Path(mjcf_path).parent}")
+
+        # Read original MJCF content
+        with open(mjcf_path, 'r') as f:
+            content = f.read()
+
+        # Add gravity option after compiler if not present
+        if '<option' not in content:
+            content = content.replace(
+                '<compiler angle="radian" />',
+                '<compiler angle="radian" />\n\n  <option gravity="0 0 -7.0" />'
+            )
+
+        # Create temporary file in the SAME directory as original MJCF
+        import tempfile
+        import os
+        original_dir = Path(mjcf_path).parent
+
+        with tempfile.NamedTemporaryFile(
+                mode='w',
+                suffix='.xml',
+                dir=original_dir,  # Keep in same directory
+                delete=False
+        ) as f:
+            f.write(content)
+            temp_path = f.name
+
+        try:
+            model = mujoco_scenes.mjcf.load_mjmodel(temp_path, scene="smooth")
+            return model
+        finally:
+            # Clean up temp file
+            os.unlink(temp_path)
 
     def get_mujoco_model_metadata(self, mj_model: mujoco.MjModel) -> ksim.Metadata:
         """Get model metadata."""
@@ -75,7 +106,9 @@ class TQCHumanoidStandingTask(TQCHumanoidTask[TQCHumanoidConfig]):
     def get_actuators(self, physics_model: ksim.PhysicsModel, metadata: ksim.Metadata | None = None) -> ksim.Actuators:
         """Get actuators."""
         assert metadata is not None, "Metadata is required"
+
         return ksim.PositionActuators(physics_model=physics_model, metadata=metadata)
+
 
     def get_physics_randomizers(self, physics_model: ksim.PhysicsModel) -> list[ksim.PhysicsRandomizer]:
         """Get physics randomizers."""
@@ -198,109 +231,72 @@ class TQCHumanoidStandingTask(TQCHumanoidTask[TQCHumanoidConfig]):
 
     def get_commands(self, physics_model: ksim.PhysicsModel) -> list[ksim.Command]:
         """Get commands."""
-        return []
+        return [
+            ksim.FloatVectorCommand(
+                ranges=(
+                    (-0.3, 0.3),  # First command: left/right weight shift (meters)
+                    (-0.2, 0.2),  # Second command: forward/back weight shift (meters)
+                    (0.8, 1.0),  # Third command: target height (meters)
+                ),
+                switch_prob=0.02,  # 2% chance to switch commands each timestep
+            )
+        ]
 
     def get_rewards(self, physics_model: ksim.PhysicsModel) -> list[ksim.Reward]:
-        """Properly balanced scaling with reasonable internal multipliers."""
-
         return [
-            # 🎯 PRIMARY OBJECTIVES
+            # PHASE 1: Basic standing - much stronger signal needed
             MuJoCoStandupHeightReward(
-                target_height=0.95,
-                #scale=14.0,  # Reasonable scale
-                scale=40.0,  # Reasonable scale
+                target_height=0.85,
+                scale=200.0,
             ),
 
             SimpleHeadUprightReward.create(
                 physics_model=physics_model,
                 imu_body_name="Torso_Side_Right",
-                scale=25.0,  # Good scale for head upright
+                scale=60.0,
             ),
 
-            # 🤖 POSE REFINEMENT
-            #MirrorSymmetryReward.create(
+            # PHASE 2: Hand contact penalty - reduce slightly
+            #ContactPenalty.create(
             #    physics_model=physics_model,
-            #    scale=13,  # Balanced scale
-            #    tolerance=0.1,
+            #    body_names=(
+            #        "KB_C_501X_Left_Bayonet_Adapter_Hard_Stop",
+            #        "KB_C_501X_Right_Bayonet_Adapter_Hard_Stop",
+            #        "KC_C_401L_L_UpForearmDrive",  # Left upper arm
+            #        "KC_C_401R_R_UpForearmDrive",  # Right upper arm
+            #    ),
+            #    floor_geom_names=("floor",),
+            #    #scale=-0.01,  # Reduce from -8.0 since it was dominating
+            #    scale=-0.01,  # Reduce from -8.0 since it was dominating
             #),
 
-            #MirrorSymmetryPenalty.create(
-            #    physics_model=physics_model,
-            #    scale=-12.0,  # Strong negative scale
-            #    tolerance=0.3,
-            #    penalty_strength=20.0,  # Very strong penalty
-            #),
-
+            # PHASE 3: Foot contact - massive increase needed
             FootContactReward.create(
                 physics_model=physics_model,
                 foot_body_names=("KB_D_501L_L_LEG_FOOT", "KB_D_501R_R_LEG_FOOT"),
                 floor_geom_names=("floor",),
-                scale=30.0,  # Important for standing
-                contact_threshold= 0.02,
+                scale=700.0,  # Up from 6.0 - was only 0.0001125
             ),
 
-            FootStabilityReward.create(
+            # PHASE 4: Center of mass - moderate increase
+            CenterOfMassPositionReward(scale=100.0),  # Up from 4.0
+
+            # Standing duration - significant increase
+            StandingDurationReward(scale=60.0),  # Up from 3.0
+
+            # PHASE 5: Weight shifting
+            WeightShiftTrackingReward.create(
                 physics_model=physics_model,
-                foot_body_names=("KB_D_501L_L_LEG_FOOT", "KB_D_501R_R_LEG_FOOT"),
-                scale=6.0,  # Good stability scale
+                scale=100.0,  # Up from 2.0
+                x_tolerance=0.2,
+                y_tolerance=0.2,
+                height_tolerance=0.15,
+                min_standing_height=0.7,
             ),
 
-            # 🎯 HEIGHT STABILIZATION
-            ksim.BaseHeightRangeReward(
-                z_lower=0.4,
-                z_upper=0.95,
-                dropoff=30.0,
-                scale=25.0,  # Good height range scale
-            ),
-
-            ConditionalJointPositionReward.create(
-                physics_model=physics_model,
-                min_height=0.75,
-                max_height=1.00,
-                tolerance=0.3,
-                scale=12.0,  # Good joint scale
-            ),
-
-            ## 🚫 PENALTIES (keep your increased penalties)
-            #ksim.AngularVelocityPenalty(index=("x", "y", "z"), scale=-0.01),
-            #ksim.LinearVelocityPenalty(index=("z"), scale=-0.02),
-            #ksim.ActionAccelerationPenalty(scale=-0.001),
-            #ksim.JointVelocityPenalty(scale=-0.001),
-            #ContactPenalty.create(
-            #    physics_model=physics_model,
-            #    body_names=("Torso_Side_Right",),
-            #    floor_geom_names=("floor",),
-            #    scale=-0.2,
-            #),
-            #ksim.CtrlPenalty(scale=-0.0002),
-            #ksim.LinkAccelerationPenalty(scale=-0.02),
-            #ksim.AvoidLimitsPenalty.create(
-            #    model=physics_model,
-            #    factor=0.1,
-            #    scale=-0.03
-            #),
-            # 🚫 PENALTIES (keep your increased penalties)
-            #ksim.AngularVelocityPenalty(index=("x", "y", "z"), scale=-10),
-            ksim.AngularVelocityPenalty(index=("x", "y", "z"), scale=-20),
-            ksim.LinearVelocityPenalty(index=("z"), scale=-1.0),
-            #ksim.ActionAccelerationPenalty(scale=-1.0),
-            ksim.ActionAccelerationPenalty(scale=-3.0),
-            #ksim.JointVelocityPenalty(scale=-0.05),
-            ksim.JointVelocityPenalty(scale=-0.09),
-            ContactPenalty.create(
-                physics_model=physics_model,
-                body_names=("Torso_Side_Right",),
-                floor_geom_names=("floor",),
-                scale=-0.07,
-            ),
-            #ksim.CtrlPenalty(scale=-0.004),
-            ksim.CtrlPenalty(scale=-0.01),
-            ksim.LinkAccelerationPenalty(scale=-1.0),
-            ksim.AvoidLimitsPenalty.create(
-                model=physics_model,
-                factor=0.1,
-                scale=-0.03
-            ),
+            # Penalties - keep proportionally smaller
+           ksim.AngularVelocityPenalty(index=("x", "y", "z"), scale=-4.0),  # Up from -0.5
+           ksim.ActionAccelerationPenalty(scale=-1.0),  # Up from -0.02
         ]
 
 

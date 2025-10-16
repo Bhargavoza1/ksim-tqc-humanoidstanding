@@ -27,14 +27,14 @@ def main_standing():
 
             learning_rate_actor=1e-4,
             learning_rate_critic=3e-4,
-            learning_rate_temp=8e-5,
+            learning_rate_temp=1e-4,
             #use_circular_gradients=False,  # Use stable detached gradients
             #learning_rate_temp_circular=3e-4,
             # 🌡️ ENTROPY SETTINGS
             #target_entropy="auto",  # -action_dim
             target_entropy="auto",  # -action_dim
             ent_coef="auto",        # Learnable temperature
-            initial_temperature=0.06,  # Lower initial temperature for more focused exploration
+            initial_temperature=0.02,  # Lower initial temperature for more focused exploration
 
 
             # 📊 TRAINING SCALE

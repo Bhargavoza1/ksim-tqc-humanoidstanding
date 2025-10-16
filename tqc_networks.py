@@ -121,27 +121,50 @@ class TqcActor(eqx.Module):
         ]
 
         # Define standing pose bias (target pose)
+        #self.action_bias_list = [
+        #    0.0,  # right_shoulder_pitch - neutral
+        #    math.radians(-10.0),  # right_shoulder_roll - slight outward
+        #    0.0,  # right_shoulder_yaw - neutral
+        #    math.radians(90.0),  # right_elbow - bent for balance
+        #    0.0,  # right_wrist - neutral
+        #    0.0,  # left_shoulder_pitch - neutral
+        #    math.radians(10.0),  # left_shoulder_roll - slight outward (mirrored)
+        #    0.0,  # left_shoulder_yaw - neutral
+        #    math.radians(-90.0),  # left_elbow - bent for balance (mirrored)
+        #    0.0,  # left_wrist - neutral
+        #    math.radians(-20.0),  # right_hip_pitch - slight forward lean
+        #    math.radians(0.0),  # right_hip_roll - neutral
+        #    0.0,  # right_hip_yaw - neutral
+        #    math.radians(-50.0),  # right_knee - bent for standing
+        #    math.radians(30.0),  # right_ankle - forward tilt
+        #    math.radians(20.0),  # left_hip_pitch - slight forward lean (mirrored)
+        #    math.radians(0.0),  # left_hip_roll - neutral
+        #    0.0,  # left_hip_yaw - neutral
+        #    math.radians(50.0),  # left_knee - bent for standing (mirrored)
+        #    math.radians(-30.0),  # left_ankle - forward tilt (mirrored)
+        #]
+
         self.action_bias_list = [
             0.0,  # right_shoulder_pitch - neutral
-            math.radians(-10.0),  # right_shoulder_roll - slight outward
+            0.0,  # right_shoulder_roll - slight outward
             0.0,  # right_shoulder_yaw - neutral
-            math.radians(90.0),  # right_elbow - bent for balance
+            0.0,   # right_elbow - bent for balance
             0.0,  # right_wrist - neutral
             0.0,  # left_shoulder_pitch - neutral
-            math.radians(10.0),  # left_shoulder_roll - slight outward (mirrored)
+            0.0,   # left_shoulder_roll - slight outward (mirrored)
             0.0,  # left_shoulder_yaw - neutral
-            math.radians(-90.0),  # left_elbow - bent for balance (mirrored)
+            0.0,   # left_elbow - bent for balance (mirrored)
             0.0,  # left_wrist - neutral
-            math.radians(-20.0),  # right_hip_pitch - slight forward lean
-            math.radians(0.0),  # right_hip_roll - neutral
+            0.0,   # right_hip_pitch - slight forward lean
+            0.0,   # right_hip_roll - neutral
             0.0,  # right_hip_yaw - neutral
-            math.radians(-50.0),  # right_knee - bent for standing
-            math.radians(30.0),  # right_ankle - forward tilt
-            math.radians(20.0),  # left_hip_pitch - slight forward lean (mirrored)
-            math.radians(0.0),  # left_hip_roll - neutral
+            0.0,   # right_knee - bent for standing
+            0.0,   # right_ankle - forward tilt
+            0.0,   # left_hip_pitch - slight forward lean (mirrored)
+            0.0,  # left_hip_roll - neutral
             0.0,  # left_hip_yaw - neutral
-            math.radians(50.0),  # left_knee - bent for standing (mirrored)
-            math.radians(-30.0),  # left_ankle - forward tilt (mirrored)
+            0.0,  # left_knee - bent for standing (mirrored)
+            0.0,   # left_ankle - forward tilt (mirrored)
         ]
 
         # Calculate action limits relative to bias
@@ -223,7 +246,7 @@ class TqcActor(eqx.Module):
         log_std = jnp.dot(x, self.log_std_layer.weight.T) + self.log_std_layer.bias
 
         # MUCH tighter log_std clipping for stable standing
-        log_std = jnp.clip(log_std, -8.0, 1.0)
+        log_std = jnp.clip(log_std, -20.0, 2.0)
         std = jnp.exp(log_std)
 
         # Create distribution
